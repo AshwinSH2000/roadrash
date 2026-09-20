@@ -1,0 +1,41 @@
+{
+  "name": "roadrash-browser",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "check:track": "node scripts/run-sim.mjs track",
+    "check:bike": "node scripts/run-sim.mjs fit",
+    "check:rider": "node scripts/run-sim.mjs rider",
+    "sim:race": "node scripts/run-sim.mjs race",
+    "sim:probe": "node scripts/run-sim.mjs probe",
+    "sim:brake": "node scripts/run-sim.mjs brake",
+    "sim:corner": "node scripts/run-sim.mjs corner",
+    "sim:skidpad": "node scripts/run-sim.mjs skidpad",
+    "sim:falls": "node scripts/run-sim.mjs falls",
+    "sim:combat": "node scripts/run-sim.mjs combat",
+    "sim:aicombat": "node scripts/run-sim.mjs aicombat",
+    "sim:flow": "node scripts/run-sim.mjs flow",
+    "sim:spin": "node scripts/run-sim.mjs spin",
+    "sim:nitro": "node scripts/run-sim.mjs nitro",
+    "sim:oversteer": "node scripts/run-sim.mjs oversteer",
+    "sim:replay": "node scripts/run-sim.mjs replay",
+    "sim:profile": "node scripts/run-sim.mjs profile",
+    "sim:climb": "node scripts/run-sim.mjs climb"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.14.0",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "lil-gui": "^0.19.2",
+    "stats.js": "^0.17.0",
+    "@types/stats.js": "^0.17.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

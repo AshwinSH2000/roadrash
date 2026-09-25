@@ -4,7 +4,7 @@ import type { PhysicsWorld } from "../physics/PhysicsWorld";
 import { OFFROAD_SURFACE, ROAD_SURFACE, SurfaceRegistry } from "../physics/TerrainMaterial";
 import { OFFROAD_HALF_WIDTH, ROAD_HALF_WIDTH, TrackDefinition } from "./TrackDefinition";
 import { GROUPS_FINISH_SENSOR, GROUPS_TERRAIN } from "../physics/CollisionGroups";
-import { createAsphaltTexture, createGrassTexture } from "../render/Textures";
+import { createAsphaltTexture, createCliffTexture, createGrassTexture } from "../render/Textures";
 import { buildBoundaryWalls } from "./Boundary";
 
 /**
@@ -208,6 +208,80 @@ function terrainMaterial(
   return material;
 }
 
+/** Metres of real height one cliff-texture tile covers, vertically down the skirt. */
+const CLIFF_VERTICAL_TILE = 3;
+/** Metres of track distance one cliff-texture tile covers, along the skirt. */
+const CLIFF_ALONG_TILE = 6;
+
+/**
+ * A visible "cliff" skirt connecting the off-road band's dropped outer edge
+ * down to the ground-fill plane far below, on both sides of the track.
+ *
+ * Requested directly, after the invisible boundary wall went in: on any
+ * stretch where the track runs well above the course's single lowest point
+ * (which is where the flat ground-fill plane is pinned — see that block's
+ * comment below), there was nothing rendered in the gap between the
+ * off-road edge and that plane, so the sky showed straight through it close
+ * to the player, low in the frame — read as "is this sky, water, or
+ * unfinished" rather than as the edge of the world. This closes that gap
+ * with a textured surface that shares the off-road band's own outer-edge
+ * X/Z and top Y (so there's no seam), varying in height per sample the way
+ * the gap itself does — tall on a climb, a thin sliver at the course's
+ * lowest point.
+ *
+ * Built as its own swept ribbon rather than by generalising `buildBand`:
+ * its bottom edge isn't a fixed offset from the local sample the way every
+ * other band's edges are — it's pinned to one global absolute height
+ * (`groundFillY`) — which `BandSpec`'s per-call (not per-sample) lift can't
+ * express. Visual only (no collider — the boundary wall already stops
+ * anything physical well before here), so unlike the road/off-road bands,
+ * winding doesn't need to be measured and corrected: the material is simply
+ * double-sided.
+ */
+function buildCliffSkirt(track: TrackDefinition, groundFillY: number): THREE.Mesh {
+  const count = track.sampleCount;
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (const side of [-1, 1] as const) {
+    const base = positions.length / 3;
+    for (let i = 0; i < count; i++) {
+      const center = track.samplePoints[i];
+      const right = track.sampleRights[i];
+      const topY = center.y + OFFROAD_OUTER_DROP;
+      const height = Math.max(0.1, topY - groundFillY);
+
+      const x = center.x + right.x * side * OFFROAD_HALF_WIDTH;
+      const z = center.z + right.z * side * OFFROAD_HALF_WIDTH;
+      positions.push(x, topY, z, x, groundFillY, z);
+
+      const v = track.sampleDistances[i] / CLIFF_ALONG_TILE;
+      uvs.push(0, v, height / CLIFF_VERTICAL_TILE, v);
+    }
+
+    for (let i = 0; i < count - 1; i++) {
+      const a = base + i * 2;
+      const b = base + (i + 1) * 2;
+      indices.push(a, b, a + 1);
+      indices.push(a + 1, b, b + 1);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
+  const material = terrainMaterial(createCliffTexture(), 0x7a6a58, 1.0);
+  material.side = THREE.DoubleSide;
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = "boundary-cliff";
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
 function addTrimeshCollider(
   physics: PhysicsWorld,
   body: RAPIER.RigidBody,
@@ -327,6 +401,12 @@ export function buildTrack(
   groundFillMesh.receiveShadow = true;
   groundFillMesh.name = "ground-fill";
   group.add(groundFillMesh);
+
+  // --- Boundary cliff (visual) ---------------------------------------------
+  // Fills the gap between the off-road edge and the ground fill below it —
+  // see buildCliffSkirt for why that gap read as an unfinished sky-coloured
+  // hole rather than an edge of the world.
+  group.add(buildCliffSkirt(track, groundFillY));
 
   // --- Boundary wall -------------------------------------------------------
   // Invisible — stops a rider drifting past the off-road band from falling

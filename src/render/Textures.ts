@@ -136,6 +136,52 @@ export function createGrassTexture(bandWidthMetres: number): THREE.CanvasTexture
 }
 
 /**
+ * Rocky/earth cliff face — horizontal strata bands plus grain, tiling
+ * vertically down the boundary skirt (`TrackBuilder`'s `buildCliffSkirt`).
+ * `null` under Node (no `<canvas>`); see the file comment.
+ */
+export function createCliffTexture(): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+
+  ctx.fillStyle = "#7a6a58";
+  ctx.fillRect(0, 0, size, size);
+
+  // Horizontal strata — a handful of bands, darker or lighter than the base,
+  // is enough to read as layered rock rather than a flat tint.
+  const bandCount = 6 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < bandCount; i++) {
+    const y = (i / bandCount) * size;
+    const h = size / bandCount;
+    const v = 60 + Math.floor(Math.random() * 50);
+    ctx.fillStyle = `rgba(${v},${v - 14},${v - 26},${(0.25 + Math.random() * 0.35).toFixed(2)})`;
+    ctx.fillRect(0, y, size, h * (0.5 + Math.random() * 0.5));
+  }
+
+  // Grain on top of the strata, same technique as the road/grass textures.
+  speckle(
+    ctx,
+    size,
+    1600,
+    () => {
+      const v = 70 + Math.floor(Math.random() * 50);
+      const alpha = 0.15 + Math.random() * 0.25;
+      return `rgba(${v},${v - 10},${v - 20},${alpha.toFixed(2)})`;
+    },
+    0.4,
+    1.3,
+  );
+
+  // Both axes of tiling are baked directly into the skirt's own per-vertex
+  // UVs (`TrackBuilder.buildCliffSkirt`) rather than `texture.repeat` — the
+  // skirt's height varies every sample (it follows the terrain), which a
+  // single fixed repeat factor can't express the way it can for the road's
+  // constant width. So this stays at the identity repeat.
+  return finishTexture(canvas, 1);
+}
+
+/**
  * A single soft, blobby white cloud on a transparent background, meant to be
  * used once per `THREE.Sprite` rather than tiled — see `render/Sky.ts`, which
  * scatters many differently-scaled, differently-rotated sprites from this one

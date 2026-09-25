@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import GUI from "lil-gui";
-import { createSceneSetup, focusSunOn } from "../render/SceneSetup";
+import { createSceneSetup, focusSunOn, positionSkyDome } from "../render/SceneSetup";
 import { PhysicsWorld } from "../physics/PhysicsWorld";
 import { SurfaceRegistry } from "../physics/TerrainMaterial";
 import { FIXED_DT, FixedStepAccumulator } from "./Clock";
@@ -88,6 +88,7 @@ export class Game {
   private readonly camera: THREE.PerspectiveCamera;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly sunLight: THREE.DirectionalLight;
+  private readonly skyDome: THREE.Mesh;
   private readonly physics: PhysicsWorld;
   /** Phase 9: bloom + SSAO, "high" preset only. Null means render straight to the canvas. */
   private readonly postProcessing: PostProcessing | null;
@@ -167,6 +168,7 @@ export class Game {
     this.camera = setup.camera;
     this.renderer = setup.renderer;
     this.sunLight = setup.sunLight;
+    this.skyDome = setup.skyDome;
     this.physics = physics;
 
     // The course from the start screen, or a random one; `?track=Name` on
@@ -932,6 +934,7 @@ export class Game {
     // The camera watches the rider, not the bike, once they've been thrown off.
     this.chaseCamera.update(this.player.bike, this.player.rider.cameraPosition, frameDelta);
     focusSunOn(this.sunLight, this.player.rider.cameraPosition);
+    positionSkyDome(this.skyDome, this.camera.position);
     this.syncStrikeVisuals();
     this.updateAudio();
     this.updateHud();

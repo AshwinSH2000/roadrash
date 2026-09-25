@@ -180,7 +180,9 @@ export class Game {
     // watching a whole race (and its end screen) without a hand on the keys.
     const startOnAutopilot = import.meta.env.DEV && query.get("autopilot") === "1";
     this.track = new TrackDefinition(layout);
-    console.info(`[track] "${layout.name}" — ${layout.description} (quality: ${choice.quality})`);
+    console.info(
+      `[track] "${layout.name}" — ${layout.description} (quality: ${choice.quality}, transmission: ${choice.transmission})`,
+    );
     this.builtTrack = buildTrack(this.physics, this.scene, this.track, this.surfaces);
 
     const quality = QUALITY_PRESETS[choice.quality];
@@ -202,6 +204,7 @@ export class Game {
 
     this.input = new InputManager();
     this.player = this.createField();
+    this.player.bike.controller.setTransmissionMode(choice.transmission);
 
     // Drivers are assigned only once every racer exists, because the AI needs
     // to see the whole field in order to avoid it, and combat needs it to find
@@ -259,7 +262,8 @@ export class Game {
     console.log(
       `[Phase 4] ${this.racers.length} riders on a ${this.track.raceLength.toFixed(0)}m race ` +
         `(${this.track.totalLength.toFixed(0)}m spline). Player starts P${PLAYER_GRID_SLOT + 1}. ` +
-        `Space = pause, O = autopilot${import.meta.env.DEV ? ", H = dev readout" : ""}.`,
+        `Space = pause, O = autopilot, T = manual/automatic (Q/E to shift in manual)` +
+        `${import.meta.env.DEV ? ", H = dev readout" : ""}.`,
     );
     console.log(
       `[Phase 7] bots fight each other; bots attack you: ${this.aiCombatSettings.botsAttackPlayer ? "ON" : "off"} ` +
@@ -514,6 +518,8 @@ export class Game {
       trackName: this.track.name,
       speedKph,
       gear: controller.gear,
+      manualTransmission: controller.transmissionMode === "manual",
+      rpmNormalized: controller.rpmNormalized,
       position: playerPosition,
       fieldSize: this.racers.length,
       raceTime: this.flow.raceElapsed,
@@ -537,6 +543,7 @@ export class Game {
           `rider     ${player.rider.current}`,
           `race      ${this.flow.current}`,
           this.autopilotEngaged ? "O         AUTOPILOT — press O to take back over" : "O         autopilot",
+          `T         transmission: ${controller.transmissionMode}${controller.transmissionMode === "manual" ? " (Q/E to shift)" : ""}`,
           "X/Z       knock off self / nearest rival",
           `bots      fight each other; attack you: ${this.aiCombatSettings.botsAttackPlayer ? "ON" : "off"}`,
           ...(this.telemetry
@@ -724,6 +731,19 @@ export class Game {
   }
 
   /**
+   * T: manual/automatic, mid-race — the player only; bots never leave
+   * automatic. No re-sync needed on the way into manual: automatic keeps the
+   * gear matched to road speed at every step, so whatever gear is current
+   * when the key is pressed is already the right one to inherit.
+   */
+  private toggleTransmissionMode(): void {
+    const controller = this.player.bike.controller;
+    const next = controller.transmissionMode === "manual" ? "automatic" : "manual";
+    controller.setTransmissionMode(next);
+    console.info(`[transmission] ${next}`);
+  }
+
+  /**
    * "Race Again": everyone back on the grid, on their bikes, with nothing
    * remembered — attacks in progress, chases, cooldowns, the nitro bar, the
    * finishing order — and the countdown started. No bodies are created or
@@ -864,6 +884,7 @@ export class Game {
 
     for (let i = 0; i < steps; i++) {
       if (this.input.wasJustPressed("KeyO")) this.setAutopilot(!this.autopilotEngaged);
+      if (this.input.wasJustPressed("KeyT")) this.toggleTransmissionMode();
       if (this.input.wasJustPressed("KeyX")) this.debugKnockDown(this.player);
       if (this.input.wasJustPressed("KeyZ")) this.debugKnockDown(this.nearestOpponent());
       if (this.input.wasJustPressed("KeyM")) this.telemetry?.mark();

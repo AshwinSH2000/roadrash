@@ -3,6 +3,7 @@ import {
   QUALITY_PRESETS,
   type QualityLevel,
 } from "../settings/GraphicsSettings";
+import type { TransmissionMode } from "../physics/Transmission";
 import { DISPLAY, MONO, button, el, overlay } from "./dom";
 
 /**
@@ -20,15 +21,26 @@ export interface StartChoice {
   quality: QualityLevel;
   /** A course name, or null for a random one. */
   track: string | null;
+  transmission: TransmissionMode;
 }
 
 export interface StartScreenOptions {
   trackNames: readonly string[];
   initialTrack: string | null;
   initialQuality?: QualityLevel;
+  initialTransmission?: TransmissionMode;
   /** Skip the screen and start with the initial choices — for headless screenshots and sims. */
   autostart?: boolean;
 }
+
+const TRANSMISSION_LABELS: Record<TransmissionMode, string> = {
+  automatic: "Automatic",
+  manual: "Manual",
+};
+const TRANSMISSION_DESCRIPTIONS: Record<TransmissionMode, string> = {
+  automatic: "the box shifts itself — just ride",
+  manual: "6 gears, Q/E to shift — redline caps each gear until you upshift",
+};
 
 const CONTROLS: readonly [string, string][] = [
   ["W / ↑", "throttle"],
@@ -37,12 +49,18 @@ const CONTROLS: readonly [string, string][] = [
   ["P", "punch"],
   ["K", "kick"],
   ["N", "nitro"],
+  ["Q / E", "shift down/up (manual)"],
+  ["T", "manual ⇄ automatic"],
   ["space", "pause"],
 ];
 
 export function showStartScreen(options: StartScreenOptions): Promise<StartChoice> {
   if (options.autostart) {
-    return Promise.resolve({ quality: options.initialQuality ?? DEFAULT_QUALITY, track: options.initialTrack });
+    return Promise.resolve({
+      quality: options.initialQuality ?? DEFAULT_QUALITY,
+      track: options.initialTrack,
+      transmission: options.initialTransmission ?? "automatic",
+    });
   }
   return new Promise((resolve) => {
     const root = overlay(40, 0.72);
@@ -108,6 +126,50 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
     qualityBlock.append(cards, describe);
     selectQuality(quality);
 
+    // --- transmission ------------------------------------------------------
+    let transmission: TransmissionMode = options.initialTransmission ?? "automatic";
+    const transmissionBlock = el("div", "display:flex;flex-direction:column;gap:10px;align-items:center");
+    transmissionBlock.appendChild(
+      el("div", `font:600 13px/1 ${MONO};letter-spacing:0.2em;opacity:0.75`, "TRANSMISSION"),
+    );
+    const transmissionCards = el("div", "display:flex;gap:12px");
+    const transmissionCardEls = new Map<TransmissionMode, HTMLDivElement>();
+    const transmissionDescribe = el("div", `font:400 13px/1.4 ${MONO};opacity:0.7;min-height:1.4em;text-align:center`);
+
+    const selectTransmission = (mode: TransmissionMode): void => {
+      transmission = mode;
+      for (const [m, card] of transmissionCardEls) {
+        const on = m === mode;
+        card.style.borderColor = on ? "#ff9f1c" : "rgba(255,255,255,0.35)";
+        card.style.background = on ? "rgba(255,159,28,0.18)" : "rgba(255,255,255,0.06)";
+      }
+      transmissionDescribe.textContent = TRANSMISSION_DESCRIPTIONS[mode];
+    };
+
+    for (const mode of ["automatic", "manual"] as const) {
+      const card = el(
+        "div",
+        [
+          "cursor:pointer",
+          "width:120px",
+          "padding:13px 0",
+          "text-align:center",
+          "border:2px solid rgba(255,255,255,0.35)",
+          "border-radius:8px",
+          `font:700 18px/1 ${DISPLAY}`,
+          "letter-spacing:0.1em",
+          "text-transform:uppercase",
+          "user-select:none",
+        ].join(";"),
+        TRANSMISSION_LABELS[mode],
+      );
+      card.addEventListener("click", () => selectTransmission(mode));
+      transmissionCardEls.set(mode, card);
+      transmissionCards.appendChild(card);
+    }
+    transmissionBlock.append(transmissionCards, transmissionDescribe);
+    selectTransmission(transmission);
+
     // --- course ----------------------------------------------------------
     const courseBlock = el("div", "display:flex;align-items:center;gap:12px");
     courseBlock.appendChild(el("div", `font:600 13px/1 ${MONO};letter-spacing:0.2em;opacity:0.75`, "COURSE"));
@@ -151,7 +213,7 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
     const finish = (): void => {
       window.removeEventListener("keydown", onKey);
       root.remove();
-      resolve({ quality, track: select.value || null });
+      resolve({ quality, track: select.value || null, transmission });
     };
     const onKey = (event: KeyboardEvent): void => {
       if (event.code === "Enter" || event.code === "NumpadEnter") finish();
@@ -159,7 +221,7 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
     start.addEventListener("click", finish);
     window.addEventListener("keydown", onKey);
 
-    root.append(title, subtitle, qualityBlock, courseBlock, controls, start, hint);
+    root.append(title, subtitle, qualityBlock, transmissionBlock, courseBlock, controls, start, hint);
     document.body.appendChild(root);
     start.focus();
   });

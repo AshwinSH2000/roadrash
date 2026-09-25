@@ -24,7 +24,8 @@
     "sim:oversteer": "node scripts/run-sim.mjs oversteer",
     "sim:replay": "node scripts/run-sim.mjs replay",
     "sim:profile": "node scripts/run-sim.mjs profile",
-    "sim:climb": "node scripts/run-sim.mjs climb"
+    "sim:climb": "node scripts/run-sim.mjs climb",
+    "sim:manual": "node scripts/run-sim.mjs manual"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

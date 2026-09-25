@@ -26,6 +26,10 @@ export interface HudData {
   trackName: string;
   speedKph: number;
   gear: number;
+  /** True only in manual transmission — gates the rpm readout below; automatic's HUD is unchanged (gear only). */
+  manualTransmission: boolean;
+  /** 0..1 between idle and redline — only read/shown when `manualTransmission` is true. */
+  rpmNormalized: number;
   position: number;
   fieldSize: number;
   raceTime: number;
@@ -52,6 +56,8 @@ export class HUD {
   private readonly progressMarker: HTMLDivElement;
   private readonly speed: HTMLDivElement;
   private readonly gear: HTMLDivElement;
+  /** Only shown in manual mode — see `HudData.manualTransmission`. */
+  private readonly rpm: HTMLDivElement;
   private readonly status: HTMLDivElement;
   private readonly nitroFill: HTMLDivElement;
   private readonly nitroLabel: HTMLDivElement;
@@ -102,7 +108,10 @@ export class HUD {
     this.speed = el("div", `font:italic 900 64px/1 ${DISPLAY};letter-spacing:-0.02em;min-width:2.2em;text-align:right`);
     const unit = el("div", `font:600 16px/1 ${DISPLAY};opacity:0.7`, "km/h");
     this.gear = el("div", `font:600 16px/1 ${MONO};opacity:0.7;margin-left:14px`);
-    speedRow.append(this.speed, unit, this.gear);
+    // Manual only — a redline cue the player actually needs to see to know
+    // when to shift; automatic never shows it (the box handles it invisibly).
+    this.rpm = el("div", `font:600 16px/1 ${MONO};opacity:0.7;margin-left:8px;display:none`);
+    speedRow.append(this.speed, unit, this.gear, this.rpm);
     bottom.append(this.status, speedRow);
 
     // --- bottom-left: nitro ----------------------------------------------
@@ -148,6 +157,19 @@ export class HUD {
 
     this.speed.textContent = d.speedKph.toFixed(0);
     this.gear.textContent = `G${d.gear}`;
+
+    if (d.manualTransmission) {
+      this.rpm.style.display = "inline";
+      const pct = Math.round(d.rpmNormalized * 100);
+      this.rpm.textContent = `${pct}%`;
+      // A shift cue, not a warning light: amber approaching redline, red
+      // right at it — the same two-stage falloff `Transmission.manualDrive`
+      // itself uses, so the colour changes exactly when the engine stops
+      // pulling as hard.
+      this.rpm.style.color = d.rpmNormalized >= 0.95 ? "#ff5a4d" : d.rpmNormalized >= 0.82 ? "#ffd27a" : "";
+    } else {
+      this.rpm.style.display = "none";
+    }
 
     if (d.recovering) {
       this.status.textContent = "GET BACK ON THE BIKE";

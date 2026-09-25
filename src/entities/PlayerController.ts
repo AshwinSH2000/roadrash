@@ -12,6 +12,9 @@ const STEER_RIGHT_KEYS = ["KeyD", "ArrowRight"];
 const PUNCH_KEY = "KeyP";
 const KICK_KEY = "KeyK";
 const NITRO_KEY = "KeyN";
+/** Manual transmission only — a no-op in automatic (see Transmission.shiftUp/shiftDown). */
+const SHIFT_DOWN_KEY = "KeyQ";
+const SHIFT_UP_KEY = "KeyE";
 
 /**
  * Maps raw keyboard input to bike throttle/steer input each fixed physics step.
@@ -34,6 +37,8 @@ export class PlayerController implements Driver {
     if (this.input.wasJustPressed(PUNCH_KEY)) this.combat.request(this.self, AttackKind.PUNCH);
     if (this.input.wasJustPressed(KICK_KEY)) this.combat.request(this.self, AttackKind.KICK);
     if (this.input.wasJustPressed(NITRO_KEY)) this.nitro.tryActivate();
+    if (this.input.wasJustPressed(SHIFT_UP_KEY)) this.bike.controller.shiftUp();
+    if (this.input.wasJustPressed(SHIFT_DOWN_KEY)) this.bike.controller.shiftDown();
 
     const throttle = this.input.isAnyDown(THROTTLE_KEYS) ? 1 : 0;
     const brake = this.input.isAnyDown(BRAKE_KEYS) ? 1 : 0;

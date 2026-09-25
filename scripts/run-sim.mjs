@@ -37,6 +37,7 @@ const entries = {
   track: "check-track.ts",
   climb: "climb-probe.ts",
   hole: "hole-probe.ts",
+  manual: "manual-transmission-sim.ts",
 };
 const entry = entries[which];
 if (!entry) {

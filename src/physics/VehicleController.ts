@@ -4,7 +4,7 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import type { PhysicsWorld } from "./PhysicsWorld";
 import { DEFAULT_SURFACE, SurfaceRegistry, type SurfaceProperties } from "./TerrainMaterial";
 import { GROUPS_BIKE, GROUPS_WHEEL_RAY } from "./CollisionGroups";
-import { Transmission } from "./Transmission";
+import { Transmission, type TransmissionMode } from "./Transmission";
 
 /**
  * "Arcade-sim hybrid" motorcycle physics: Rapier's built-in raycast vehicle
@@ -262,7 +262,11 @@ export class VehicleController {
   private lastEngineForce = 0;
   private currentSteerLimit = 0;
 
-  /** Gear/rpm simulation. Feeds audio and the HUD only — never the physics. */
+  /**
+   * Gear/rpm simulation. Automatic mode (every bot, and the player by
+   * default): audio and HUD only, never the physics. Manual mode
+   * (player-only, opt-in): also the real drive force — see `applyDrivetrain`.
+   */
   private readonly transmission = new Transmission();
 
   private readonly tmpDrag = new THREE.Vector3();
@@ -489,7 +493,7 @@ export class VehicleController {
     return this.lastEngineForce;
   }
 
-  /** 1-based gear from the simulated automatic box. Sound and display only. */
+  /** 1-based gear. Sound/display only in automatic mode; drives real force in manual — see `transmissionMode`. */
   get gear(): number {
     return this.transmission.gear;
   }
@@ -501,6 +505,29 @@ export class VehicleController {
   /** Engine speed as 0..1 between idle and redline. */
   get rpmNormalized(): number {
     return this.transmission.rpmNormalized;
+  }
+
+  get transmissionMode(): TransmissionMode {
+    return this.transmission.transmissionMode;
+  }
+
+  /** Total forward gears (6). For UI — Transmission itself never needs to be asked. */
+  get gearCount(): number {
+    return this.transmission.gearCount;
+  }
+
+  setTransmissionMode(mode: TransmissionMode): void {
+    this.transmission.setMode(mode);
+  }
+
+  /** Manual mode only; a no-op in automatic (there's nothing to shift — the box does it itself). */
+  shiftUp(): void {
+    this.transmission.shiftUp();
+  }
+
+  /** Manual mode only; a no-op in automatic. */
+  shiftDown(): void {
+    this.transmission.shiftDown();
   }
 
   /**
@@ -872,7 +899,19 @@ export class VehicleController {
     let engineForce = 0;
     let brake = 0;
 
-    if (this.throttleInput > 0) {
+    if (this.throttleInput > 0 && this.transmission.transmissionMode === "manual") {
+      // Manual mode: real per-gear drive instead of the continuous curve
+      // below — see Transmission.manualDrive for the model. Nitro's extra
+      // top speed is passed through as a scale on every gear's own top
+      // speed, for the same reason it stretches `topSpeedEstimate` below.
+      const topSpeedScale = 1 + (this.boosting ? cfg.boostExtraTopSpeed / cfg.topSpeedEstimate : 0);
+      const boost = this.boosting ? cfg.boostForceMultiplier : 1;
+      const drive = this.transmission.manualDrive(forwardSpeed, topSpeedScale);
+      engineForce = cfg.maxEngineForce * this.throttleInput * drive.forceMultiplier * boost;
+      if (drive.overRevBrakeMultiplier > 0) {
+        brake = Math.max(brake, cfg.engineBrakeForce * drive.overRevBrakeMultiplier);
+      }
+    } else if (this.throttleInput > 0) {
       // Nitro stretches the torque curve out to a higher top speed and
       // multiplies the force under it, so it both permits and delivers the
       // extra speed.

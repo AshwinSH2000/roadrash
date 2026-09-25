@@ -76,11 +76,16 @@ export class ChaseCamera {
   private readonly lookVelocity = new THREE.Vector3();
   private currentFov: number;
   private initialised = false;
+  /** True once the player has finished — the rig sits ahead of the bike instead of behind it, looking back at the finish line, so the player can watch who finishes next. See `setReversed`. */
+  private reversed = false;
 
   private readonly tmpDesired = new THREE.Vector3();
   private readonly tmpAnchor = new THREE.Vector3();
   private readonly tmpBack = new THREE.Vector3();
   private readonly tmpForward = new THREE.Vector3();
+  /** Where the arm actually extends from, and which way it looks — `tmpBack`/`tmpForward` themselves when not reversed, swapped when they are. Never used for roll, which always follows the bike's true heading. */
+  private readonly tmpArmBack = new THREE.Vector3();
+  private readonly tmpArmLook = new THREE.Vector3();
   private readonly tmpDir = new THREE.Vector3();
   private readonly tmpUp = new THREE.Vector3();
   private readonly tmpDesiredTarget = new THREE.Vector3();
@@ -99,6 +104,16 @@ export class ChaseCamera {
 
   get tuning(): ChaseCameraConfig {
     return this.config;
+  }
+
+  /**
+   * Requested directly: once the player finishes, flip the rig to the
+   * bike's front side looking back, so the finish line and any racer still
+   * closing on it stay in frame instead of disappearing over the horizon
+   * ahead. `restartRace` sets this back to `false` for the next race.
+   */
+  setReversed(reversed: boolean): void {
+    this.reversed = reversed;
   }
 
   /**
@@ -122,6 +137,11 @@ export class ChaseCamera {
     // world every time the bike tips into a corner.
     this.tmpBack.copy(LOCAL_BACK).applyQuaternion(bike.worldQuaternion).normalize();
     this.tmpForward.copy(LOCAL_FORWARD).applyQuaternion(bike.worldQuaternion).normalize();
+    // Reversed: the rig sits on the bike's *front* side and looks back over
+    // it — swapped here, and only here, so roll below still always follows
+    // the bike's true heading rather than flipping sign when reversed.
+    this.tmpArmBack.copy(this.reversed ? this.tmpForward : this.tmpBack);
+    this.tmpArmLook.copy(this.reversed ? this.tmpBack : this.tmpForward);
 
     const distance = cfg.followDistance + cfg.extraDistanceAtSpeed * speedRatio;
     const height = cfg.followHeight + cfg.extraHeightAtSpeed * speedRatio;
@@ -129,7 +149,7 @@ export class ChaseCamera {
     this.tmpAnchor.copy(bikePosition).addScaledVector(WORLD_UP, cfg.lookHeight);
     this.tmpDesired
       .copy(bikePosition)
-      .addScaledVector(this.tmpBack, distance)
+      .addScaledVector(this.tmpArmBack, distance)
       .addScaledVector(WORLD_UP, height);
 
     this.tmpFocus.copy(focus);
@@ -137,7 +157,7 @@ export class ChaseCamera {
 
     this.tmpDesiredTarget
       .copy(this.tmpAnchor)
-      .addScaledVector(this.tmpForward, cfg.lookAheadAtSpeed * speedRatio);
+      .addScaledVector(this.tmpArmLook, cfg.lookAheadAtSpeed * speedRatio);
 
     if (!this.initialised) {
       this.position.copy(this.tmpDesired);
@@ -203,7 +223,7 @@ export class ChaseCamera {
     const scale = allowed / fullLength;
     this.tmpDesired
       .copy(this.tmpFocus)
-      .addScaledVector(this.tmpBack, distance * scale)
+      .addScaledVector(this.tmpArmBack, distance * scale)
       .addScaledVector(WORLD_UP, cfg.lookHeight + (height - cfg.lookHeight) * scale);
   }
 }

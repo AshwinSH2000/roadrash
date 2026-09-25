@@ -11,7 +11,7 @@ import { BrakeToStopDriver, Racer } from "../entities/Racer";
 import { RiderStateMachine } from "../entities/RiderStateMachine";
 import { AttackPhase, CombatSystem, type HitEvent } from "../combat/CombatSystem";
 import { RaceFlow, RacePhase, RaceResult } from "./RaceFlow";
-import { HUD, type HudStanding } from "../ui/HUD";
+import { HUD, MINIMAP_RANGE, type HudStanding, type MinimapData, type MinimapTrackSample } from "../ui/HUD";
 import { CountdownOverlay } from "../ui/CountdownOverlay";
 import { EndScreen } from "../ui/EndScreen";
 import type { StartChoice } from "../ui/StartScreen";
@@ -20,7 +20,7 @@ import { GRID_COLUMNS, GRID_ROWS, PLAYER_GRID_SLOT, gridPose } from "../track/St
 import { attackDuration, ATTACKS } from "../combat/AttackDefinitions";
 import { ChaseCamera } from "../camera/ChaseCamera";
 import { EngineAudio } from "../audio/EngineAudio";
-import { TrackDefinition } from "../track/TrackDefinition";
+import { ROAD_HALF_WIDTH, TrackDefinition } from "../track/TrackDefinition";
 import { pickTrack } from "../track/tracks";
 import { buildTrack, type BuiltTrack } from "../track/TrackBuilder";
 import { buildScenery } from "../track/Scenery";
@@ -48,7 +48,7 @@ import {
   type BikeFitting,
   type BikeVisualsFactory,
 } from "../entities/BikeVisuals";
-import { LOCAL_RIGHT, WORLD_UP } from "../utils/Directions";
+import { LOCAL_FORWARD, LOCAL_RIGHT, WORLD_UP } from "../utils/Directions";
 
 /**
  * Six riders on the point-to-point course — the player plus five AI opponents
@@ -132,6 +132,7 @@ export class Game {
   private pauseKeyWasDown = false;
 
   private readonly tmpKnock = new THREE.Vector3();
+  private readonly tmpMinimapForward = new THREE.Vector3();
 
   private finishedCount = 0;
   /**
@@ -532,6 +533,7 @@ export class Game {
         this.flow.isRacing && firstFinish !== null
           ? this.flow.deadline(firstFinish) - this.flow.raceElapsed
           : null,
+      minimap: this.buildMinimapData(player),
     });
 
     if (this.hud.debugVisible) {
@@ -556,6 +558,50 @@ export class Game {
         ].join("\n"),
       );
     }
+  }
+
+  /**
+   * The minimap's local window: the road's actual left/right edges for
+   * `±MINIMAP_RANGE` metres of the player's `distanceAlong` (built from
+   * `TrackDefinition.sampleRights`, exactly like `TrackBuilder` builds the
+   * real road/off-road bands, just without a collider), the player's world
+   * position and current forward direction (what the map's rotation is
+   * built from — see `HUD.drawMinimap`), and every racer's world position.
+   */
+  private buildMinimapData(player: Racer): MinimapData {
+    const track = this.track;
+    const centreIndex = track.sampleIndexAt(player.distanceAlong);
+    const windowSamples = Math.ceil(MINIMAP_RANGE / track.sampleSpacing);
+    const startIndex = Math.max(0, centreIndex - windowSamples);
+    const endIndex = Math.min(track.samplePoints.length - 1, centreIndex + windowSamples);
+
+    const trackSamples: MinimapTrackSample[] = [];
+    for (let i = startIndex; i <= endIndex; i++) {
+      const p = track.samplePoints[i];
+      const r = track.sampleRights[i];
+      trackSamples.push({
+        leftX: p.x - r.x * ROAD_HALF_WIDTH,
+        leftZ: p.z - r.z * ROAD_HALF_WIDTH,
+        rightX: p.x + r.x * ROAD_HALF_WIDTH,
+        rightZ: p.z + r.z * ROAD_HALF_WIDTH,
+      });
+    }
+
+    this.tmpMinimapForward.copy(LOCAL_FORWARD).applyQuaternion(player.bike.worldQuaternion);
+
+    return {
+      trackSamples,
+      riders: this.racers.map((racer) => ({
+        x: racer.bike.worldPosition.x,
+        z: racer.bike.worldPosition.z,
+        color: racer.color,
+        isPlayer: racer.isPlayer,
+      })),
+      playerX: player.bike.worldPosition.x,
+      playerZ: player.bike.worldPosition.z,
+      playerForwardX: this.tmpMinimapForward.x,
+      playerForwardZ: this.tmpMinimapForward.z,
+    };
   }
 
   /** Race time of the first rider across the line, or null while nobody has finished. */
@@ -760,6 +806,7 @@ export class Game {
     for (const behavior of this.combatBehaviors) behavior.reset();
     this.nitro.reset();
     this.player.bike.controller.setBoost(false);
+    this.chaseCamera.setReversed(false);
     this.finishedCount = 0;
     this.raceClock = 0;
     this.endScreenTimer = -1;
@@ -846,6 +893,9 @@ export class Game {
       console.log(
         `[Phase 4] P${racer.finishPosition}  ${racer.name}  ${racer.raceTime.toFixed(2)}s`,
       );
+      // Requested directly: once the player crosses the line, watch who
+      // finishes next instead of staring at the empty road ahead.
+      if (racer.isPlayer) this.chaseCamera.setReversed(true);
     });
   }
 
@@ -986,6 +1036,7 @@ export class Game {
       controller.rpmNormalized,
       Math.max(0, controller.debugInputs.throttle),
       speedRatio,
+      controller.gear,
     );
   }
 }

@@ -22,6 +22,45 @@ export interface HudStanding {
   gap: number;
 }
 
+/** One rider's world position for the minimap — everything it needs to place a dot, nothing else. */
+export interface MinimapRider {
+  x: number;
+  z: number;
+  /** 0xRRGGBB — the same colour as the cone over their head, so the map and the world agree. */
+  color: number;
+  isPlayer: boolean;
+}
+
+/**
+ * The road's left/right edges at one point along the centreline, in world
+ * space, already offset by the road's half-width — `Game.ts` builds these
+ * from `TrackDefinition.sampleRights` so the minimap itself never needs to
+ * know how wide the road is or which way is "right". Ordered along the
+ * track, so consecutive samples are the ribbon's actual next segment.
+ */
+export interface MinimapTrackSample {
+  leftX: number;
+  leftZ: number;
+  rightX: number;
+  rightZ: number;
+}
+
+export interface MinimapData {
+  /** The local window of road centred on the player — see `MINIMAP_RANGE`. */
+  trackSamples: readonly MinimapTrackSample[];
+  /** Every racer, the player included. */
+  riders: readonly MinimapRider[];
+  /** The player's own world position — everything above is drawn relative to this. */
+  playerX: number;
+  playerZ: number;
+  /** The player's current forward direction in the world (X/Z, need not be unit length) — this is what points straight up on the map, so the map rotates as the player turns rather than the player's dot. */
+  playerForwardX: number;
+  playerForwardZ: number;
+}
+
+/** Metres ahead/behind the player the minimap's window covers — a fixed local slice, not the whole course. */
+export const MINIMAP_RANGE = 200;
+
 export interface HudData {
   trackName: string;
   speedKph: number;
@@ -42,7 +81,13 @@ export interface HudData {
   recovering: boolean;
   /** Seconds left before a DNF, or null while nobody has finished. */
   secondsToDnf: number | null;
+  minimap: MinimapData;
 }
+
+/** A square panel — `±MINIMAP_RANGE` metres of forward/back range sets the scale for both axes, so a curve draws at its true proportions rather than being stretched to fit a non-square shape. */
+const MINIMAP_SIZE = 180;
+const MINIMAP_DOT_RADIUS = 4;
+const MINIMAP_PLAYER_DOT_RADIUS = 6;
 
 export class HUD {
   private readonly nodes: HTMLElement[] = [];
@@ -62,6 +107,8 @@ export class HUD {
   private readonly nitroFill: HTMLDivElement;
   private readonly nitroLabel: HTMLDivElement;
   private readonly debug: HTMLPreElement;
+  private readonly minimapCanvas: HTMLCanvasElement;
+  private readonly minimapCtx: CanvasRenderingContext2D | null;
 
   private lastStandingsKey = "";
 
@@ -121,6 +168,19 @@ export class HUD {
     this.nitroFill = el("div", "height:100%;width:100%;background:#3ddc84;transition:width 80ms linear");
     this.nitroLabel = el("div", `position:absolute;left:0;top:-18px;font:12px/1 ${MONO};color:#fff;letter-spacing:0.08em`, "NITRO  [N]");
     nitro.append(this.nitroFill, this.nitroLabel);
+
+    // --- top-right: minimap ------------------------------------------------
+    const mapPanel = this.add(
+      el(
+        "div",
+        `position:fixed;right:16px;top:16px;padding:6px;background:${PANEL_BG};border-radius:6px;pointer-events:none;z-index:10`,
+      ),
+    );
+    this.minimapCanvas = el("canvas", "display:block;border-radius:3px");
+    this.minimapCanvas.width = MINIMAP_SIZE;
+    this.minimapCanvas.height = MINIMAP_SIZE;
+    this.minimapCtx = this.minimapCanvas.getContext("2d");
+    mapPanel.appendChild(this.minimapCanvas);
 
     // --- dev readout -----------------------------------------------------
     this.debug = el(
@@ -215,6 +275,111 @@ export class HUD {
         this.standings.appendChild(el("div", `text-align:right;opacity:0.8;${style}`, detail));
       });
     }
+
+    this.drawMinimap(d.minimap);
+  }
+
+  /**
+   * A real local map, not a schematic: the actual road curve, within
+   * `±MINIMAP_RANGE` metres of the player along the track, redrawn every
+   * frame rotated so the player's current heading always points straight up
+   * — a standard "heading-up" nav map. The player's dot never moves (always
+   * the exact centre); when the road bends, the ribbon and everyone on it
+   * swing around that fixed point instead.
+   *
+   * The rotation itself is two dot products, not trig: `Game.ts` hands over
+   * the player's forward vector (X/Z, not necessarily unit length) rather
+   * than a heading angle, and projecting a world-space offset onto that
+   * vector gives the "forward" screen axis directly; projecting onto its
+   * perpendicular (`-forwardZ, forwardX` — this project's own right-hand
+   * convention, see `utils/Directions.rightOf`) gives "right". No
+   * trigonometric functions, no wraparound to worry about.
+   */
+  private drawMinimap(m: MinimapData): void {
+    const ctx = this.minimapCtx;
+    if (!ctx) return;
+    const w = this.minimapCanvas.width;
+    const h = this.minimapCanvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "rgba(20,20,24,0.55)";
+    ctx.fillRect(0, 0, w, h);
+
+    const flen = Math.hypot(m.playerForwardX, m.playerForwardZ);
+    if (flen < 1e-6) return;
+    const fx = m.playerForwardX / flen;
+    const fz = m.playerForwardZ / flen;
+    // Perpendicular to (fx, fz) — this project's `right = forward × up` convention, flattened to the XZ plane.
+    const rx = -fz;
+    const rz = fx;
+
+    const scale = w / (MINIMAP_RANGE * 2);
+    const cx = w / 2;
+    const cy = h / 2;
+    // World offset from the player -> screen point, heading-up.
+    const project = (x: number, z: number): { x: number; y: number } => {
+      const dx = x - m.playerX;
+      const dz = z - m.playerZ;
+      return {
+        x: cx + (dx * rx + dz * rz) * scale,
+        y: cy - (dx * fx + dz * fz) * scale,
+      };
+    };
+
+    // The road ribbon: left edge out, right edge back, one closed path — a
+    // filled strip that actually follows the curve, not a straight band.
+    if (m.trackSamples.length >= 2) {
+      ctx.fillStyle = "rgba(160,160,168,0.7)";
+      ctx.beginPath();
+      const first = project(m.trackSamples[0].leftX, m.trackSamples[0].leftZ);
+      ctx.moveTo(first.x, first.y);
+      for (let i = 1; i < m.trackSamples.length; i++) {
+        const p = project(m.trackSamples[i].leftX, m.trackSamples[i].leftZ);
+        ctx.lineTo(p.x, p.y);
+      }
+      for (let i = m.trackSamples.length - 1; i >= 0; i--) {
+        const p = project(m.trackSamples[i].rightX, m.trackSamples[i].rightZ);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.closePath();
+      ctx.fill();
+
+      // A dashed centreline, from the midpoint of each edge pair — a style
+      // cue, not new data.
+      ctx.strokeStyle = "rgba(255,255,255,0.3)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 5]);
+      ctx.beginPath();
+      for (let i = 0; i < m.trackSamples.length; i++) {
+        const s = m.trackSamples[i];
+        const p = project((s.leftX + s.rightX) / 2, (s.leftZ + s.rightZ) / 2);
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Everyone else first, the player last, so the player's dot is never
+    // hidden under someone overlapping it.
+    for (const r of m.riders) {
+      if (r.isPlayer) continue;
+      const p = project(r.x, r.z);
+      if (p.x < -MINIMAP_DOT_RADIUS || p.x > w + MINIMAP_DOT_RADIUS || p.y < -MINIMAP_DOT_RADIUS || p.y > h + MINIMAP_DOT_RADIUS) continue;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, MINIMAP_DOT_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle = cssColor(r.color);
+      ctx.fill();
+    }
+
+    const player = m.riders.find((r) => r.isPlayer);
+    if (!player) return;
+    ctx.beginPath();
+    ctx.arc(cx, cy, MINIMAP_PLAYER_DOT_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = cssColor(player.color);
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.stroke();
   }
 
   /** Dev-only readout — a block of preformatted lines. */
@@ -234,4 +399,9 @@ export class HUD {
     for (const node of this.nodes) node.remove();
     this.nodes.length = 0;
   }
+}
+
+/** 0xRRGGBB, the same numeric colour every rider's cone/bike paint already uses, as a canvas fill style. */
+function cssColor(color: number): string {
+  return `#${color.toString(16).padStart(6, "0")}`;
 }

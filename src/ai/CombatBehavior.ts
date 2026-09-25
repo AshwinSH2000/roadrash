@@ -15,9 +15,15 @@ import type { RiderPersonality } from "./RiderPersonality";
  * `aggression` and — sometimes — decides to go for them. That opens a short
  * *engagement*: for a few seconds the bot's racing line is bent toward the
  * target's side and its speed is matched to theirs, so it pulls alongside
- * instead of past. The moment the geometry says a strike will connect, it
- * throws one through the very same `CombatSystem.request()` the player's P
- * and K keys use — a bot has no reach, timing or force the player lacks.
+ * instead of past. It does not swing the moment it draws level, though:
+ * once truly alongside (`STRIKE_GAP`), it has to accumulate a fresh random
+ * 2-5 s stand-off (`STRIKE_DELAY_MIN`/`MAX`) before a strike is even allowed
+ * to be attempted — requested directly, so the target has a real window to
+ * notice and pull away rather than eating a hit the instant someone draws
+ * level. Only once that wait is up, and only if the geometry still says a
+ * strike will connect, does it throw one — through the very same
+ * `CombatSystem.request()` the player's P and K keys use, since a bot has
+ * no reach, timing or force the player lacks.
  *
  * Whether the swing lands or not, the engagement ends with it and the bot
  * goes back to racing for a cooldown. That single rule is what keeps fights
@@ -95,12 +101,31 @@ const HUNT_WIDTH = 7;
  * other hand, would follow a faster rider all the way down the road — hence
  * the hard ceiling on the whole affair, `MAX_CHASE_SECONDS`.
  */
-const ENGAGE_SECONDS_MIN = 2.0;
-const ENGAGE_SECONDS_MAX = 4.0;
+const ENGAGE_SECONDS_MIN = 3.0;
+const ENGAGE_SECONDS_MAX = 7.0;
 /** Along-road gap within which a strike is geometrically possible at all, so the engage clock runs. */
 const STRIKE_GAP = 3.5;
-/** Ceiling on one chase from start to finish, whatever the target does. */
-const MAX_CHASE_SECONDS = 8;
+/**
+ * Ceiling on one chase from start to finish, whatever the target does.
+ * Raised alongside `ENGAGE_SECONDS_MAX`/`STRIKE_DELAY_MAX` below — an
+ * aggressive bot now needs room for the approach plus a full 5 s stand-off,
+ * not just the old instant-swing window.
+ */
+const MAX_CHASE_SECONDS = 12;
+
+/**
+ * Requested directly: bots were throwing a punch or kick the instant they
+ * drew level, giving the target no chance to see it coming and pull away.
+ * Once alongside (`STRIKE_GAP`), a bot now has to accumulate a fresh random
+ * 2-5 s of *cumulative* time spent there before it's allowed to swing at
+ * all — geometry (`tryStrike`) still gates the actual hit, this just delays
+ * when it's first allowed to try. The clock pauses (doesn't reset) if the
+ * gap briefly wobbles back outside `STRIKE_GAP`, since that happens
+ * constantly in a real race through corners and speed changes; it only
+ * clears fully if the target is genuinely dropped (see `tick`).
+ */
+const STRIKE_DELAY_MIN = 2.0;
+const STRIKE_DELAY_MAX = 5.0;
 
 /**
  * Seconds of plain racing after a swing or an abandoned chase, from keen to
@@ -113,10 +138,10 @@ const COOLDOWN_MAX = 8;
 
 /**
  * Lateral separation the bot aims for while hunting, in metres. Inside the
- * punch's 2.3 m reach with room for the target to twitch, but not so close
- * that the two chassis boxes trade paint before the strike goes out.
+ * punch's 1.6 m reach with a little room to spare, but not so close that the
+ * two chassis boxes trade paint before the strike goes out.
  */
-const STRIKE_LATERAL = 1.7;
+const STRIKE_LATERAL = 1.3;
 
 /** Speed correction per metre of along-road gap while pulling alongside, in 1/s. */
 const GAP_GAIN = 1.2;
@@ -143,6 +168,12 @@ export class CombatBehavior {
   private chaseElapsed = 0;
   private cooldownTimer = 0;
   private decisionTimer = 0;
+  /**
+   * Seconds still to wait, alongside, before a strike may be attempted at
+   * all — `null` while not currently alongside (see `STRIKE_DELAY_MIN`/`MAX`
+   * above). Rolled fresh each time the bot becomes alongside its target.
+   */
+  private strikeDelay: number | null = null;
 
   /**
    * For sims and tuning: how often this bot went hunting, how often it swung,
@@ -179,6 +210,7 @@ export class CombatBehavior {
     this.chaseElapsed = 0;
     this.cooldownTimer = 0;
     this.decisionTimer = 0;
+    this.strikeDelay = null;
   }
 
   tick(dtSeconds: number): CombatIntent {
@@ -198,11 +230,27 @@ export class CombatBehavior {
     if (this.target) {
       this.chaseElapsed += dtSeconds;
       const gap = Math.abs(this.target.distanceAlong - this.self.distanceAlong);
-      if (gap <= STRIKE_GAP) this.engageTimer -= dtSeconds;
+      const alongside = gap <= STRIKE_GAP;
+      if (alongside) {
+        this.engageTimer -= dtSeconds;
+        if (this.strikeDelay === null) {
+          this.strikeDelay = THREE.MathUtils.lerp(STRIKE_DELAY_MIN, STRIKE_DELAY_MAX, this.random());
+        } else {
+          this.strikeDelay -= dtSeconds;
+        }
+      }
+      // Not alongside right now: patience isn't spent (as before), and the
+      // stand-off clock *pauses* rather than resetting — a real race has
+      // riders' gap wobbling in and out of STRIKE_GAP through corners and
+      // speed changes, and the wait is meant to be cumulative time spent
+      // near someone, not one unbroken window. A genuine escape still clears
+      // it: `isValidTarget` dropping the target below, or patience/the chase
+      // ceiling running out, both reset it via `dropTarget`.
+
       if (this.engageTimer <= 0 || this.chaseElapsed >= MAX_CHASE_SECONDS) {
         this.stats.expired++;
         this.dropTarget(true);
-      } else {
+      } else if (this.strikeDelay !== null && this.strikeDelay <= 0) {
         this.tryStrike(this.target);
       }
     }
@@ -268,6 +316,7 @@ export class CombatBehavior {
     this.target = null;
     this.engageTimer = 0;
     this.chaseElapsed = 0;
+    this.strikeDelay = null;
     if (startCooldown) {
       this.cooldownTimer = THREE.MathUtils.lerp(
         COOLDOWN_MAX,

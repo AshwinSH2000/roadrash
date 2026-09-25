@@ -51,7 +51,10 @@ export const PUNCH: AttackDefinition = {
   windup: 0.1,
   active: 0.1,
   recovery: 0.32,
-  range: 2.3,
+  // Tightened from 2.3 m (requested directly: riders were landing hits from
+  // too far apart) — see CombatBehavior's STRIKE_LATERAL, which positions a
+  // hunting bot within this reach with margin to spare.
+  range: 1.6,
   arc: THREE.MathUtils.degToRad(58),
   knockback: 240,
   closingSpeedBonus: 0.02,
@@ -62,7 +65,8 @@ export const KICK: AttackDefinition = {
   windup: 0.2,
   active: 0.13,
   recovery: 0.6,
-  range: 3.0,
+  // Tightened from 3.0 m — see PUNCH's range comment.
+  range: 2.1,
   arc: THREE.MathUtils.degToRad(44),
   knockback: 420,
   closingSpeedBonus: 0.03,

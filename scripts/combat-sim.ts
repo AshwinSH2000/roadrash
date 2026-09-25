@@ -2,7 +2,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { PhysicsWorld } from "../src/physics/PhysicsWorld";
 import { SurfaceRegistry, ROAD_SURFACE } from "../src/physics/TerrainMaterial";
-import { GROUPS_TERRAIN } from "../src/physics/CollisionGroups";
+import { GROUPS_TERRAIN, LAYER_BIKE, LAYER_TERRAIN, interactionGroups } from "../src/physics/CollisionGroups";
 import { Bike } from "../src/entities/Bike";
 import { Racer } from "../src/entities/Racer";
 import { RiderStateMachine } from "../src/entities/RiderStateMachine";
@@ -71,6 +71,22 @@ async function build(
   const victimBike = new Bike(
     physics, surfaces, scene,
     new THREE.Vector3(offset.x, 1, offset.z), facing, 0xd0342f,
+  );
+
+  // The real game lets bike chassis collide with each other (so a bike can't
+  // ride through another), but this rig places them at hand-picked
+  // separations/bearings meant to isolate the hit-detection *geometry* — at
+  // the tighter ranges (see AttackDefinitions.ts), some of those synthetic
+  // placements have the two 2 m-long chassis boxes already overlapping, and
+  // Rapier's own penetration correction would nudge them apart mid-attack
+  // and quietly change the very angle/distance under test. Disabling
+  // bike-bike collision for just these two riders keeps geometry the only
+  // variable, matching this file's stated intent.
+  attackerBike.controller.chassisCollider.setCollisionGroups(
+    interactionGroups(LAYER_BIKE, LAYER_TERRAIN),
+  );
+  victimBike.controller.chassisCollider.setCollisionGroups(
+    interactionGroups(LAYER_BIKE, LAYER_TERRAIN),
   );
 
   const attacker = new Racer(
@@ -149,11 +165,22 @@ async function main(): Promise<void> {
   }
 
   // --- 2. Arc -------------------------------------------------------------
-  console.log("\nArc — victim at 1.8 m, swung around the attacker:\n");
+  // Well inside the punch's 1.6 m range (see AttackDefinitions.ts), so range
+  // isn't what's under test here — only the arc is. Held stationary (zero
+  // pinned velocity, same mechanism the closing-speed test below uses): at
+  // this separation the two chassis boxes (2 m long) already overlap in the
+  // forward axis for any bearing approaching 90 degrees, and left free the
+  // resulting collision push-apart shifts the victim enough, over the
+  // strike's few steps, to flip a bearing back inside the arc — a physics-
+  // engine artifact of the test rig, not a real gameplay condition (the AI
+  // positions bots almost directly to the side, near bearing 0).
+  const arcTestSeparation = 1.2;
+  const stationary = { attacker: new THREE.Vector3(), victim: new THREE.Vector3() };
+  console.log(`\nArc — victim at ${arcTestSeparation} m, swung around the attacker:\n`);
   console.log("bearing from the side   inside arc?   connected?");
   const punchArc = THREE.MathUtils.radToDeg(ATTACKS[AttackKind.PUNCH].arc);
   for (const bearing of [0, 30, punchArc - 5, punchArc + 8, 90]) {
-    const { connected } = await attempt(1.8, bearing, AttackKind.PUNCH);
+    const { connected } = await attempt(arcTestSeparation, bearing, AttackKind.PUNCH, stationary);
     const shouldHit = bearing <= punchArc;
     const ok = connected === shouldHit;
     console.log(
@@ -202,7 +229,8 @@ async function main(): Promise<void> {
   const impulses: number[] = [];
   for (const closing of [0, 5, 10]) {
     const towardAttacker = LOCAL_RIGHT.clone().multiplyScalar(-closing);
-    const { hit } = await attempt(2.0, 0, AttackKind.PUNCH, {
+    // Also well inside the punch's 1.6 m range — see the arc test above.
+    const { hit } = await attempt(arcTestSeparation, 0, AttackKind.PUNCH, {
       attacker: new THREE.Vector3(0, 0, 0),
       victim: towardAttacker,
     });

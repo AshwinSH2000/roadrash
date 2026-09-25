@@ -34,10 +34,17 @@ import { FIXED_DT } from "../src/core/Clock";
  *      caught in an endless fight loop, and every knocked-down rider gets up,
  *      rejoins and finishes.
  *   3. The same race with the setting on: bots go for the player, and over
- *      two races land at least one hit. Whether any single race produces a
+ *      six races land at least one hit. Whether any single race produces a
  *      hit on the player depends on who happens to be alongside when a bot
- *      rolls to engage, so one race is a coin toss; the plate test above is
- *      the deterministic proof that the setting works.
+ *      rolls to engage — and now on that rider holding position long enough
+ *      to clear the mandatory 2-5 s stand-off before a bot may swing at all
+ *      (`CombatBehavior`'s `STRIKE_DELAY_MIN`/`MAX`, requested directly so a
+ *      target has real time to move away) — so any single race is very much
+ *      a coin toss now; six races is enough samples that requiring zero
+ *      hits across all of them stays a real signal rather than noise. The
+ *      plate test above, which pins both bikes stationary and alongside for
+ *      the whole 15 s, is the deterministic proof the setting and the
+ *      stand-off both work at all.
  *
  * Bot decisions are random, so the sims run on a seeded generator and are
  * repeatable; `SEED=n` picks another.
@@ -331,7 +338,8 @@ async function main(): Promise<void> {
   // --- 3 ---
   let playerChases = 0;
   let playerHits = 0;
-  for (const seed of [SEED, SEED + 1]) {
+  const raceSeeds = [SEED, SEED + 1, SEED + 2, SEED + 3, SEED + 4, SEED + 5];
+  for (const seed of raceSeeds) {
     console.log(`\nRace, bots attack you ON (seed ${seed}):`);
     const hostile = await race(onSetting, seed);
     printRace(hostile);
@@ -341,9 +349,11 @@ async function main(): Promise<void> {
     if (hostile.stillDown.length) failures.push(`Ended the race off their bike (setting on, seed ${seed}): ${hostile.stillDown.join(", ")}`);
     if (hostile.leaked.length) failures.push(`Ragdoll bodies leaked (setting on, seed ${seed}): ${hostile.leaked.join(", ")}`);
   }
-  console.log(`\nwith the setting on, over two races: ${playerChases} chase(s) at the player, ${playerHits} hit(s) landed`);
+  console.log(
+    `\nwith the setting on, over ${raceSeeds.length} races: ${playerChases} chase(s) at the player, ${playerHits} hit(s) landed`,
+  );
   if (playerChases === 0) failures.push("No bot ever went for the player with the setting on.");
-  if (playerHits === 0) failures.push("The player was never hit with the setting on, over two races.");
+  if (playerHits === 0) failures.push(`The player was never hit with the setting on, over ${raceSeeds.length} races.`);
 
   console.log("");
   if (failures.length > 0) {

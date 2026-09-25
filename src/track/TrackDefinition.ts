@@ -1,7 +1,14 @@
 import * as THREE from "three";
 import { WORLD_UP, rightOf } from "../utils/Directions";
-import type { TrackLayout } from "./TrackLayout";
+import type { SceneryBiome, TrackLayout } from "./TrackLayout";
 import { DEFAULT_TRACK } from "./tracks";
+
+/** A resolved scenery zone, in absolute track distance rather than the layout's authored fractions. */
+export interface SceneryZone {
+  readonly biome: SceneryBiome;
+  readonly startDistance: number;
+  readonly endDistance: number;
+}
 
 /**
  * A point-to-point course: a Catmull-Rom spline through a layout's control
@@ -100,6 +107,8 @@ export class TrackDefinition {
   readonly sampleRadii: number[] = [];
   /** Actual distance between consecutive samples, in metres. */
   readonly sampleSpacing: number;
+  /** Roadside-scenery zones, resolved from the layout's authored fractions. Always covers 0..totalLength. */
+  readonly sceneryZones: SceneryZone[] = [];
 
   private readonly tmpToPos = new THREE.Vector3();
   private readonly tmpSeg = new THREE.Vector3();
@@ -140,6 +149,27 @@ export class TrackDefinition {
 
     this.sampleSpacing = this.totalLength / divisions;
     this.computeCurvature();
+
+    for (const zone of layout.sceneryZones ?? []) {
+      this.sceneryZones.push({
+        biome: zone.biome,
+        startDistance: zone.startFraction * this.totalLength,
+        endDistance: zone.endFraction * this.totalLength,
+      });
+    }
+  }
+
+  /**
+   * What a stretch of roadside scenery at `distanceAlong` should read as.
+   * Defaults to `"forest"` — today's scenery — wherever the layout didn't
+   * author a zone covering that distance. Zones are few (a handful per
+   * course), so a linear scan is simpler than anything sorted/binary-searched.
+   */
+  biomeAt(distanceAlong: number): SceneryBiome {
+    for (const zone of this.sceneryZones) {
+      if (distanceAlong >= zone.startDistance && distanceAlong < zone.endDistance) return zone.biome;
+    }
+    return "forest";
   }
 
   /**

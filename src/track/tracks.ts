@@ -18,6 +18,11 @@ import { TrackRecipe, type TrackLayout } from "./TrackLayout";
 const ORIGINAL: TrackLayout = {
   name: "Ridgeway",
   description: "The original course — sweeping curves and gentle hills, six corners that need real braking.",
+  // A little town at the start/finish, where the crowd naturally gathers to watch — forest the rest of the way.
+  sceneryZones: [
+    { biome: "city", startFraction: 0, endFraction: 0.08 },
+    { biome: "city", startFraction: 0.92, endFraction: 1 },
+  ],
   points: [
   new THREE.Vector3(0, 0, 0),
   new THREE.Vector3(0, 1.8, 55),
@@ -128,7 +133,12 @@ const SWITCHBACK = new TrackRecipe()
   .straight(150, -4)
   .arc(58, -110, -2)
   .straight(260, 2)
-  .build("Switchback Pass", "Hairpins linked by short straights, climbing then falling — brake, turn, fire it out.");
+  .build(
+    "Switchback Pass",
+    "Hairpins linked by short straights, climbing then falling — brake, turn, fire it out.",
+    // Almost entirely mountain switchbacks; brief forest transitions at either end.
+    [{ biome: "mountain", startFraction: 0.05, endFraction: 0.95 }],
+  );
 
 const SWEEPS = new TrackRecipe()
   .straight(260, 3)
@@ -148,7 +158,12 @@ const SWEEPS = new TrackRecipe()
   .straight(200, -4)
   .arc(180, -50, -2)
   .straight(280, 0)
-  .build("Long Sweeps", "Mostly flat-out — big fast sweepers with a few tight corners hidden among them.");
+  .build(
+    "Long Sweeps",
+    "Mostly flat-out — big fast sweepers with a few tight corners hidden among them.",
+    // Open farm country matches the big flat-out sweepers.
+    [{ biome: "farm", startFraction: 0, endFraction: 1 }],
+  );
 
 /**
  * The Wall on Hillclimb: one climb far steeper than anything else in the
@@ -189,7 +204,15 @@ export function hillclimbLayout(wallGrade = WALL_GRADE): TrackLayout {
   .straight(220, -10)
   .arc(150, 50, -4)
   .straight(240, -2)
-  .build("Hillclimb", "Up over the ridge and down the other side — and one wall of a climb with a drop to match.");
+  .build(
+    "Hillclimb",
+    "Up over the ridge and down the other side — and one wall of a climb with a drop to match.",
+    // Mountain around the ridge/Wall/drop; farmland on the flatter back half; forest fills the rest.
+    [
+      { biome: "mountain", startFraction: 0.15, endFraction: 0.4 },
+      { biome: "farm", startFraction: 0.55, endFraction: 0.85 },
+    ],
+  );
 }
 
 const HILLCLIMB = hillclimbLayout();
@@ -213,7 +236,12 @@ const ESSES = new TrackRecipe()
   .straight(140, 0)
   .arc(60, -100, -2)
   .straight(260, -3)
-  .build("The Esses", "Rhythm section — left-right-left flicks where carrying speed matters more than top speed.");
+  .build(
+    "The Esses",
+    "Rhythm section — left-right-left flicks where carrying speed matters more than top speed.",
+    // A town street circuit — crowds lining the flicks; forest on the run-in/out.
+    [{ biome: "city", startFraction: 0.1, endFraction: 0.9 }],
+  );
 
 export const TRACKS: readonly TrackLayout[] = [ORIGINAL, SWITCHBACK, SWEEPS, HILLCLIMB, ESSES];
 

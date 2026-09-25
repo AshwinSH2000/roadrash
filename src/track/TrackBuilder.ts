@@ -5,6 +5,7 @@ import { OFFROAD_SURFACE, ROAD_SURFACE, SurfaceRegistry } from "../physics/Terra
 import { OFFROAD_HALF_WIDTH, ROAD_HALF_WIDTH, TrackDefinition } from "./TrackDefinition";
 import { GROUPS_FINISH_SENSOR, GROUPS_TERRAIN } from "../physics/CollisionGroups";
 import { createAsphaltTexture, createGrassTexture } from "../render/Textures";
+import { buildBoundaryWalls } from "./Boundary";
 
 /**
  * Turns a `TrackDefinition` spline into actual geometry: a road ribbon and
@@ -326,6 +327,11 @@ export function buildTrack(
   groundFillMesh.receiveShadow = true;
   groundFillMesh.name = "ground-fill";
   group.add(groundFillMesh);
+
+  // --- Boundary wall -------------------------------------------------------
+  // Invisible — stops a rider drifting past the off-road band from falling
+  // through into the void beyond it. See Boundary.ts for why.
+  buildBoundaryWalls(physics, staticBody, track);
 
   // --- Lane markings -----------------------------------------------------
   const markingMaterial = new THREE.MeshStandardMaterial({

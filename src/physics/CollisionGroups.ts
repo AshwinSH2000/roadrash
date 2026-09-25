@@ -23,6 +23,7 @@
 export const LAYER_TERRAIN = 1 << 0;
 export const LAYER_BIKE = 1 << 1;
 export const LAYER_RIDER = 1 << 2;
+export const LAYER_WALL = 1 << 3;
 
 /** Packs membership and filter into Rapier's `InteractionGroups` encoding. */
 export function interactionGroups(membership: number, filter: number): number {
@@ -35,8 +36,8 @@ export const GROUPS_TERRAIN = interactionGroups(
   LAYER_TERRAIN | LAYER_BIKE | LAYER_RIDER,
 );
 
-/** Bike chassis: the ground, and other bikes. Deliberately not riders. */
-export const GROUPS_BIKE = interactionGroups(LAYER_BIKE, LAYER_TERRAIN | LAYER_BIKE);
+/** Bike chassis: the ground, other bikes, and the world-boundary wall. Deliberately not riders. */
+export const GROUPS_BIKE = interactionGroups(LAYER_BIKE, LAYER_TERRAIN | LAYER_BIKE | LAYER_WALL);
 
 /**
  * Ragdoll limbs and riders on foot: the ground, and nothing else.
@@ -53,8 +54,11 @@ export const GROUPS_BIKE = interactionGroups(LAYER_BIKE, LAYER_TERRAIN | LAYER_B
  *
  * The cost is that two fallen riders pass through each other, which is
  * unnoticeable and vastly preferable to neither of them ever standing up.
+ *
+ * Also collides with the world-boundary wall, so a ragdoll flung sideways
+ * off a fall stops at the wall rather than tumbling through it into the void.
  */
-export const GROUPS_RIDER = interactionGroups(LAYER_RIDER, LAYER_TERRAIN);
+export const GROUPS_RIDER = interactionGroups(LAYER_RIDER, LAYER_TERRAIN | LAYER_WALL);
 
 /**
  * The finish line. Only bikes trip it — a rider tumbling across the line on
@@ -67,6 +71,18 @@ export const GROUPS_FINISH_SENSOR = interactionGroups(LAYER_TERRAIN, LAYER_BIKE)
 /**
  * What the vehicle's suspension raycasts are allowed to hit. Terrain only —
  * without this a bike would ride up over a fallen rider's ragdoll, since the
- * wheel rays don't go through the collider groups above.
+ * wheel rays don't go through the collider groups above. Deliberately does
+ * NOT include `LAYER_WALL`: a downward suspension ray should never read the
+ * vertical boundary wall as ground to ride on — the wall only needs to be
+ * something the chassis/ragdoll bodies physically collide with sideways
+ * (`GROUPS_BIKE`/`GROUPS_RIDER` above), never something wheels sense.
  */
 export const GROUPS_WHEEL_RAY = interactionGroups(LAYER_BIKE, LAYER_TERRAIN);
+
+/**
+ * The invisible world-boundary wall (`track/Boundary.ts`) that stops a rider
+ * drifting too far off-road and falling through the unmodelled ground past
+ * it. Collides with bikes and riders, not terrain (no reason for two static
+ * bodies to interact) and not the wheel raycast (see above).
+ */
+export const GROUPS_WALL = interactionGroups(LAYER_WALL, LAYER_BIKE | LAYER_RIDER);

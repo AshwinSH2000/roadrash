@@ -10,10 +10,31 @@ import * as THREE from "three";
  * a climb. Every layout goes through the same validator, so a new track is a
  * few lines and a check, not an afternoon.
  */
+/**
+ * What roadside scenery reads as along a stretch of course — see
+ * `track/Scenery.ts` for what each biome actually scatters.
+ */
+export type SceneryBiome = "forest" | "farm" | "mountain" | "city";
+
+/** One stretch of a course, as a fraction (0..1) of its total length, that reads as `biome`. */
+export interface SceneryZoneSpec {
+  readonly biome: SceneryBiome;
+  readonly startFraction: number;
+  readonly endFraction: number;
+}
+
 export interface TrackLayout {
   readonly name: string;
   readonly description: string;
   readonly points: readonly THREE.Vector3[];
+  /**
+   * Optional roadside-scenery zones, authored as fractions of the course's
+   * eventual length so they don't need the exact spline length up front.
+   * Zones need not cover the whole course — anywhere uncovered defaults to
+   * `"forest"` (`TrackDefinition.biomeAt`). Omitting this entirely is the
+   * same as leaving the whole course `"forest"`, today's scenery.
+   */
+  readonly sceneryZones?: readonly SceneryZoneSpec[];
 }
 
 /** Metres between control points on a straight. */
@@ -93,8 +114,8 @@ export class TrackRecipe {
     return this;
   }
 
-  build(name: string, description: string): TrackLayout {
-    return { name, description, points: this.points.map((p) => p.clone()) };
+  build(name: string, description: string, sceneryZones?: readonly SceneryZoneSpec[]): TrackLayout {
+    return { name, description, points: this.points.map((p) => p.clone()), sceneryZones };
   }
 
   /** Where the turtle is now — handy when tuning a recipe against the validator. */

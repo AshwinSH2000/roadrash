@@ -14,7 +14,9 @@ import { DEFAULT_VEHICLE_CONFIG } from "../physics/VehicleController";
  *  2. No grade steeper than the suspension can absorb across the wheelbase.
  *  3. No corner tighter than the off-road band can be drawn around.
  *  4. The course still demands braking: a minimum number of corners that
- *     cannot be held near top speed.
+ *     cannot be held near top speed — unless the layout says it's meant to
+ *     have none at all (`TrackLayout.requiresCornering === false`, a drag
+ *     strip), the one deliberate exception to this rule.
  */
 export interface Corner {
   distance: number;
@@ -36,6 +38,7 @@ export interface TrackReport {
   minBrakingZones: number;
   tightest: Corner | null;
   minCornerRadius: number;
+  requiresCornering: boolean;
   problems: string[];
 }
 
@@ -130,7 +133,7 @@ export function validateTrack(track: TrackDefinition): TrackReport {
     problems.push(`corner at ${tightest.distance.toFixed(0)} m can only be taken at ${tightest.holdableKph.toFixed(0)} km/h; want ${MIN_CORNER_SPEED_KPH}+.`);
   }
   const brakingZones = corners.filter((c) => c.braking).length;
-  if (brakingZones < MIN_BRAKING_ZONES) {
+  if (brakingZones < MIN_BRAKING_ZONES && track.requiresCornering) {
     problems.push(`only ${brakingZones} corner(s) need real braking; want at least ${MIN_BRAKING_ZONES}.`);
   }
 
@@ -147,6 +150,7 @@ export function validateTrack(track: TrackDefinition): TrackReport {
     minBrakingZones: MIN_BRAKING_ZONES,
     tightest,
     minCornerRadius,
+    requiresCornering: track.requiresCornering,
     problems,
   };
 }

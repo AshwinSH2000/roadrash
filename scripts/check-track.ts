@@ -30,13 +30,17 @@ for (const layout of TRACKS) {
     `closest self-approach ${report.closestApproach.distance.toFixed(0)} m (need ${report.requiredClearance.toFixed(0)}); ` +
       `steepest grade ${(report.steepest.grade * 100).toFixed(1)}% at ${report.steepest.distance.toFixed(0)} m (max ${report.maxGrade * 100}%)`,
   );
-  console.log(`corners ${report.corners.length}, braking zones ${report.brakingZones} (min ${report.minBrakingZones}), tightest ${report.tightest ? report.tightest.radius.toFixed(0) + " m" : "-"} (min ${report.minCornerRadius.toFixed(0)})`);
-  console.log(
-    "  " +
-      report.corners
-        .map((c) => `${c.distance.toFixed(0)}m:${c.radius.toFixed(0)}r${c.braking ? "*" : ""}`)
-        .join("  "),
-  );
+  if (report.requiresCornering) {
+    console.log(`corners ${report.corners.length}, braking zones ${report.brakingZones} (min ${report.minBrakingZones}), tightest ${report.tightest ? report.tightest.radius.toFixed(0) + " m" : "-"} (min ${report.minCornerRadius.toFixed(0)})`);
+    console.log(
+      "  " +
+        report.corners
+          .map((c) => `${c.distance.toFixed(0)}m:${c.radius.toFixed(0)}r${c.braking ? "*" : ""}`)
+          .join("  "),
+    );
+  } else {
+    console.log("no cornering required — a straight by design (drag strip)");
+  }
   if (report.problems.length) {
     failed++;
     for (const p of report.problems) console.log(`  PROBLEM  ${p}`);

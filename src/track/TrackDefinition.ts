@@ -109,6 +109,8 @@ export class TrackDefinition {
   readonly sampleSpacing: number;
   /** Roadside-scenery zones, resolved from the layout's authored fractions. Always covers 0..totalLength. */
   readonly sceneryZones: SceneryZone[] = [];
+  /** False only for a course built with no cornering by design (a drag strip) — see `TrackLayout`. */
+  readonly requiresCornering: boolean;
 
   private readonly tmpToPos = new THREE.Vector3();
   private readonly tmpSeg = new THREE.Vector3();
@@ -117,6 +119,7 @@ export class TrackDefinition {
   /** Builds the course from a layout; the default is the first entry in `TRACKS`, which every headless script uses. */
   constructor(layout: TrackLayout = DEFAULT_TRACK) {
     this.name = layout.name;
+    this.requiresCornering = layout.requiresCornering ?? true;
     this.curve = new THREE.CatmullRomCurve3(
       layout.points.map((p) => p.clone()),
       false,

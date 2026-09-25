@@ -243,7 +243,24 @@ const ESSES = new TrackRecipe()
     [{ biome: "city", startFraction: 0.1, endFraction: 0.9 }],
   );
 
-export const TRACKS: readonly TrackLayout[] = [ORIGINAL, SWITCHBACK, SWEEPS, HILLCLIMB, ESSES];
+/**
+ * Two miles (3218.7 m), dead straight, by design — a drag strip, not a
+ * circuit. `requiresCornering: false` (the recipe's final `build()`
+ * argument) is what lets this pass `check:track`'s validator at all: every
+ * other course must have at least 4 real braking zones, a rule that's
+ * meaningless for a course with no corners at all.
+ */
+const DRAG_RACE = new TrackRecipe()
+  .straight(3218.7)
+  .build(
+    "Drag Race",
+    "Two miles, dead straight. No corners, no braking — just how hard you can get through the gears.",
+    // A drag strip's crowd, the whole way down — grandstands and cars lined up to watch.
+    [{ biome: "city", startFraction: 0, endFraction: 1 }],
+    false,
+  );
+
+export const TRACKS: readonly TrackLayout[] = [ORIGINAL, SWITCHBACK, SWEEPS, HILLCLIMB, ESSES, DRAG_RACE];
 
 export const DEFAULT_TRACK = TRACKS[0];
 

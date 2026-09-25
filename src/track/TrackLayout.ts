@@ -35,6 +35,13 @@ export interface TrackLayout {
    * same as leaving the whole course `"forest"`, today's scenery.
    */
   readonly sceneryZones?: readonly SceneryZoneSpec[];
+  /**
+   * False only for a course built with no cornering at all by design (a
+   * drag strip) — skips `TrackValidator`'s "needs at least 4 real braking
+   * zones" rule, which every cornered circuit must still pass. Defaults to
+   * true; every existing course relies on that default and is unaffected.
+   */
+  readonly requiresCornering?: boolean;
 }
 
 /** Metres between control points on a straight. */
@@ -114,8 +121,13 @@ export class TrackRecipe {
     return this;
   }
 
-  build(name: string, description: string, sceneryZones?: readonly SceneryZoneSpec[]): TrackLayout {
-    return { name, description, points: this.points.map((p) => p.clone()), sceneryZones };
+  build(
+    name: string,
+    description: string,
+    sceneryZones?: readonly SceneryZoneSpec[],
+    requiresCornering?: boolean,
+  ): TrackLayout {
+    return { name, description, points: this.points.map((p) => p.clone()), sceneryZones, requiresCornering };
   }
 
   /** Where the turtle is now — handy when tuning a recipe against the validator. */

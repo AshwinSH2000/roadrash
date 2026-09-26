@@ -34,6 +34,33 @@ function iosPermissionGate(): DeviceOrientationEventIOS["requestPermission"] {
   return typeof ctor.requestPermission === "function" ? ctor.requestPermission : undefined;
 }
 
+function fullscreenSupported(): boolean {
+  return typeof document.documentElement.requestFullscreen === "function";
+}
+
+/**
+ * iOS gates `deviceorientation` behind a permission dialog that can only be
+ * triggered from a direct user gesture — by the time `MobileInputManager`
+ * mounts (during async `Game` bootstrap) that window has already closed, so
+ * without this the player only discovers tilt is off once they're mid-race
+ * and pause to find the enable button. Call this from the "Start race"
+ * click/Enter handler instead, while it's still a genuine gesture: once
+ * granted, `MobileInputManager`'s own later request for the same permission
+ * resolves immediately with no further prompt, so tilt is live from the
+ * green flag. Falls back to the pause-menu button exactly as before if this
+ * doesn't fire (e.g. `autostart`), so there's no new failure mode.
+ */
+export async function requestTiltPermissionFromGesture(): Promise<void> {
+  if (!isTouchDevice()) return;
+  const requestPermission = iosPermissionGate();
+  if (!requestPermission) return;
+  try {
+    await requestPermission();
+  } catch {
+    // Ignored — the pause-menu calibrate button still covers this.
+  }
+}
+
 /** Normalizes gamma/beta to "left/right tilt" regardless of portrait/landscape mount. */
 function tiltDegrees(event: DeviceOrientationEvent): number {
   const legacyOrientation = (window as unknown as { orientation?: number }).orientation;
@@ -208,6 +235,9 @@ export class MobileInputManager {
         "color:#111",
         "border:2px solid #ff9f1c",
         "box-shadow:0 4px 18px rgba(0,0,0,0.5)",
+        "-webkit-touch-callout:none",
+        "-webkit-user-select:none",
+        "-webkit-tap-highlight-color:transparent",
         // Only shown while paused (see `setPaused`) — kept off the playing screen.
         "display:none",
       ].join(";"),
@@ -237,9 +267,25 @@ export class MobileInputManager {
     this.enableTilt();
   }
 
-  /** Platforms with no permission gate (i.e. not iOS) get tilt immediately, no tap required. */
+  /**
+   * Platforms with no permission gate (i.e. not iOS) get tilt immediately.
+   * On iOS this also tries — silently, no dialog — relying on
+   * `requestTiltPermissionFromGesture` having already been granted from the
+   * start screen's click; if that didn't happen, this resolves "denied" with
+   * no prompt (a repeat call outside a gesture can't show one) and the
+   * pause-menu calibrate button is the fallback.
+   */
   private tryAutoEnableTilt(): void {
-    if (!iosPermissionGate()) this.enableTilt();
+    const requestPermission = iosPermissionGate();
+    if (!requestPermission) {
+      this.enableTilt();
+      return;
+    }
+    requestPermission()
+      .then((result) => {
+        if (result === "granted") this.enableTilt();
+      })
+      .catch(() => {});
   }
 
   private enableTilt(): void {
@@ -280,6 +326,12 @@ export class MobileInputManager {
         "letter-spacing:0.08em",
         "color:#fff",
         "user-select:none",
+        // A long press on plain text is iOS Safari's cue for the
+        // copy/lookup/select-all callout — these two suppress it and the
+        // grey tap-flash, on iOS and Android respectively.
+        "-webkit-touch-callout:none",
+        "-webkit-user-select:none",
+        "-webkit-tap-highlight-color:transparent",
         "touch-action:none",
         "pointer-events:auto",
       ].join(";"),
@@ -322,9 +374,21 @@ export class MobileInputManager {
         "background:rgba(0,0,0,0.5)",
         "color:#fff",
         "border:2px solid rgba(255,255,255,0.6)",
+        "-webkit-touch-callout:none",
+        "-webkit-user-select:none",
+        "-webkit-tap-highlight-color:transparent",
       ].join(";"),
       "⛶",
     );
+    // iPhone Safari (and every other iOS browser — Apple requires them all
+    // to run on WebKit) has no Fullscreen API at all: requestFullscreen is
+    // undefined, so the usual toggle would silently do nothing. The only
+    // real "fullscreen" on iOS is launching from a home-screen icon, so
+    // that's what the button explains there instead of pretending to work.
+    if (!fullscreenSupported()) {
+      btn.addEventListener("click", () => this.showToast("On iPhone: Share ↗ → Add to Home Screen for fullscreen"));
+      return btn;
+    }
     const sync = (): void => {
       btn.textContent = document.fullscreenElement ? "⤡" : "⛶";
     };
@@ -334,6 +398,30 @@ export class MobileInputManager {
     });
     document.addEventListener("fullscreenchange", sync);
     return btn;
+  }
+
+  /** A brief, self-dismissing message — used for the one-off iOS fullscreen explanation. */
+  private showToast(message: string): void {
+    const toast = el(
+      "div",
+      [
+        "position:fixed",
+        "top:60px",
+        "left:50%",
+        "transform:translateX(-50%)",
+        "z-index:60",
+        "max-width:80vw",
+        "text-align:center",
+        `font:600 13px/1.4 ${DISPLAY}`,
+        "padding:10px 16px",
+        "border-radius:10px",
+        "background:rgba(0,0,0,0.85)",
+        "color:#fff",
+      ].join(";"),
+      message,
+    );
+    document.body.appendChild(toast);
+    window.setTimeout(() => toast.remove(), 4000);
   }
 
   /**
@@ -394,6 +482,7 @@ export class MobileInputManager {
    * the game is fully playable windowed regardless.
    */
   private mountFullscreen(): void {
+    if (!fullscreenSupported()) return;
     const tryEnter = (): void => {
       if (document.fullscreenElement) return;
       if (!window.matchMedia("(orientation: landscape)").matches) return;

@@ -4,6 +4,7 @@ import {
   type QualityLevel,
 } from "../settings/GraphicsSettings";
 import type { TransmissionMode } from "../physics/Transmission";
+import { requestTiltPermissionFromGesture } from "../core/MobileInputManager";
 import { DISPLAY, MONO, button, el, overlay } from "./dom";
 
 /**
@@ -214,6 +215,12 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
     const finish = (): void => {
       window.removeEventListener("keydown", onKey);
       root.remove();
+      // Fired from this same click/Enter gesture — the only chance iOS gives
+      // a page to ask for the tilt-steering permission without a dialog
+      // later, mid-race, with no obvious cause. See
+      // `requestTiltPermissionFromGesture` for why a second, silent request
+      // later still works after this one succeeds.
+      void requestTiltPermissionFromGesture();
       resolve({ quality, track: select.value || null, transmission });
     };
     const onKey = (event: KeyboardEvent): void => {

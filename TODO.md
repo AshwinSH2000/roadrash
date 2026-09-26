@@ -51,6 +51,7 @@ Nothing on the rider can be built until these exist. Everything goes in
 ## Next development phases (no assets needed)
 
 - [ ] **Phase 10 — Feel/balance pass.**
+- [ ] **Deploy to GitHub Pages.** Deferred for now (game's not done). Two things needed first: `vite.config.ts` has no `base` set (defaults to `/`) — for a project page (`ashwinsh2000.github.io/roadrash/`) it needs `base: "/roadrash/"`, or asset paths break; not needed if deployed as a user root page instead. And a publish step — Pages doesn't run Vite itself, so a GitHub Actions workflow (build → upload `dist/` as the Pages artifact) or a manual `gh-pages` branch push. Repo also needs to be public for free Pages (private needs GitHub Pro/Team). Otherwise the game is already exactly the shape Pages wants: pure static `vite build` output, no backend.
 
 ## Pending your look in the browser (new)
 

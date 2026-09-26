@@ -2,7 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- iPhone has no Fullscreen API at all — launching from a home-screen
+         icon (Share -> Add to Home Screen) is the only way to hide Safari's
+         own chrome there, and these are what make that standalone mode fill
+         the screen instead of showing Safari's UI anyway. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Road Rash Browser</title>
     <style>
       html, body {

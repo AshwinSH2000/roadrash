@@ -7,6 +7,8 @@ punch or kick the ones next to you off their bikes while you're at it.
 Runs entirely client-side — no install, no backend, no account. Open it in a
 browser and race.
 
+**Play it now:** [roadrashreturns.netlify.app](https://roadrashreturns.netlify.app)
+
 ## What's in it
 
 - **Six riders, one road** — you plus five AI opponents, each with their own

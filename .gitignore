@@ -13,6 +13,9 @@ dist-ssr
 *.local
 .env
 
+# mkcert LAN dev certs (machine-specific, regenerate with mkcert)
+.certs
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

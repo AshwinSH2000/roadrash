@@ -1,6 +1,23 @@
 import { defineConfig, type Plugin } from "vite";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Phone testing needs HTTPS on the LAN — iOS gates `DeviceOrientationEvent`
+ * (tilt steering) behind a secure context, and that check isn't relaxed for
+ * a plain-HTTP LAN address the way it is for localhost. Generate the pair
+ * with `mkcert .certs/dev-cert.pem .certs/dev-key.pem localhost 127.0.0.1
+ * <lan-ip>` (see README); absent, the dev server just falls back to HTTP.
+ */
+const certFile = join(__dirname, ".certs/dev-cert.pem");
+const keyFile = join(__dirname, ".certs/dev-key.pem");
+const devHttps =
+  existsSync(certFile) && existsSync(keyFile)
+    ? { cert: readFileSync(certFile), key: readFileSync(keyFile) }
+    : undefined;
 
 /**
  * Dev-only sink for the game's telemetry (see `src/core/Telemetry.ts`). The
@@ -43,6 +60,10 @@ export default defineConfig({
   root: ".",
   publicDir: "public",
   plugins: [telemetrySink()],
+  server: {
+    https: devHttps,
+    host: true,
+  },
   build: {
     outDir: "dist",
     target: "es2022",

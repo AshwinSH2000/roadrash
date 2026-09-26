@@ -51,6 +51,24 @@ npm run build   # outputs to dist/
 npm run preview # serve the build locally to check it
 ```
 
+### Testing on a phone
+
+Touch and tilt controls (steer by tilting the device, on-screen throttle/
+brake/punch/kick/nitro) kick in automatically on any touch device — nothing
+to configure. To try them on your own phone against the dev server:
+
+```
+mkcert -install
+mkdir -p .certs
+mkcert -cert-file .certs/dev-cert.pem -key-file .certs/dev-key.pem localhost 127.0.0.1 <your-lan-ip>
+npm run dev
+```
+
+`vite.config.ts` picks up `.certs/` automatically and serves HTTPS on your
+LAN (`https://<your-lan-ip>:5173`) — needed because iOS only grants the tilt
+permission over a secure connection. No certs present, and the server just
+falls back to plain HTTP for desktop use.
+
 ### Controls
 
 | Key         | Action                                    |

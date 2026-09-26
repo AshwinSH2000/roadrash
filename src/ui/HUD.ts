@@ -112,20 +112,22 @@ export class HUD {
 
   private lastStandingsKey = "";
 
-  constructor(showDebug: boolean) {
+  constructor(showDebug: boolean, mobile = false) {
     // --- top-left: position, clock, order --------------------------------
     const left = this.add(
       el("div", `position:fixed;left:16px;top:16px;display:flex;flex-direction:column;gap:8px;pointer-events:none;z-index:10;color:#fff`),
     );
     const posRow = el("div", "display:flex;align-items:baseline;gap:6px;text-shadow:0 2px 10px rgba(0,0,0,0.8)");
-    this.position = el("div", `font:900 56px/1 ${DISPLAY};letter-spacing:0.02em`);
-    const of = el("div", `font:600 18px/1 ${DISPLAY};opacity:0.7`);
+    // Smaller on a phone screen — this block otherwise eats a chunk of a
+    // display that's already tight against the touch controls.
+    this.position = el("div", `font:900 ${mobile ? 32 : 56}px/1 ${DISPLAY};letter-spacing:0.02em`);
+    const of = el("div", `font:600 ${mobile ? 12 : 18}px/1 ${DISPLAY};opacity:0.7`);
     posRow.append(this.position, of);
     this.clock = el("div", `font:600 22px/1 ${MONO};text-shadow:0 2px 10px rgba(0,0,0,0.8)`);
     this.deadline = el("div", `font:500 12px/1 ${MONO};color:#ff9f1c;opacity:0.9;display:none`);
     this.standings = el(
       "div",
-      `display:grid;grid-template-columns:auto auto auto;gap:2px 10px;font:400 13px/1.3 ${MONO};padding:8px 10px;background:${PANEL_BG};border-radius:6px;margin-top:4px`,
+      `display:grid;grid-template-columns:auto auto auto;gap:2px 10px;font:400 ${mobile ? 10 : 13}px/1.3 ${MONO};padding:${mobile ? "5px 7px" : "8px 10px"};background:${PANEL_BG};border-radius:6px;margin-top:4px`,
     );
     left.append(posRow, this.clock, this.deadline, this.standings);
     // `of` is updated alongside position; keep a handle via closure.
@@ -161,13 +163,20 @@ export class HUD {
     speedRow.append(this.speed, unit, this.gear, this.rpm);
     bottom.append(this.status, speedRow);
 
-    // --- bottom-left: nitro ----------------------------------------------
-    const nitro = this.add(
-      el("div", `position:fixed;left:16px;bottom:24px;width:220px;height:14px;border:2px solid rgba(255,255,255,0.8);border-radius:4px;background:${PANEL_BG};pointer-events:none;z-index:10;box-sizing:border-box`),
+    // --- nitro: bottom-left on desktop, under the speed readout on mobile
+    // (bottom-left is where the touch pedals live, see MobileInputManager) --
+    const nitroWidth = mobile ? 180 : 220;
+    const nitro = el(
+      "div",
+      mobile
+        ? `position:relative;margin-top:14px;width:${nitroWidth}px;height:14px;border:2px solid rgba(255,255,255,0.8);border-radius:4px;background:${PANEL_BG};pointer-events:none;box-sizing:border-box`
+        : `position:fixed;left:16px;bottom:24px;width:${nitroWidth}px;height:14px;border:2px solid rgba(255,255,255,0.8);border-radius:4px;background:${PANEL_BG};pointer-events:none;z-index:10;box-sizing:border-box`,
     );
     this.nitroFill = el("div", "height:100%;width:100%;background:#3ddc84;transition:width 80ms linear");
     this.nitroLabel = el("div", `position:absolute;left:0;top:-18px;font:12px/1 ${MONO};color:#fff;letter-spacing:0.08em`, "NITRO  [N]");
     nitro.append(this.nitroFill, this.nitroLabel);
+    if (mobile) bottom.appendChild(nitro);
+    else this.add(nitro);
 
     // --- top-right: minimap ------------------------------------------------
     const mapPanel = this.add(
@@ -177,8 +186,9 @@ export class HUD {
       ),
     );
     this.minimapCanvas = el("canvas", "display:block;border-radius:3px");
-    this.minimapCanvas.width = MINIMAP_SIZE;
-    this.minimapCanvas.height = MINIMAP_SIZE;
+    const minimapSize = mobile ? Math.round(MINIMAP_SIZE * (2 / 3)) : MINIMAP_SIZE;
+    this.minimapCanvas.width = minimapSize;
+    this.minimapCanvas.height = minimapSize;
     this.minimapCtx = this.minimapCanvas.getContext("2d");
     mapPanel.appendChild(this.minimapCanvas);
 

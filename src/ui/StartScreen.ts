@@ -52,6 +52,7 @@ const CONTROLS: readonly [string, string][] = [
   ["Q / E", "shift down/up (manual)"],
   ["T", "manual ⇄ automatic"],
   ["space", "pause"],
+  ["tilt", "steer (touch devices)"],
 ];
 
 export function showStartScreen(options: StartScreenOptions): Promise<StartChoice> {

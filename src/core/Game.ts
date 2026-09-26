@@ -250,15 +250,19 @@ export class Game {
     }
     // The dev readout starts hidden even in dev — H brings it up. It sits
     // where the running order does, and the order is the thing to watch.
-    this.hud = new HUD(false);
+    this.hud = new HUD(false, this.mobileInput.active);
     this.endScreen = new EndScreen(
       () => this.restartRace(),
       // The renderer is built from the quality preset and never reconfigured
       // live, so "change settings" is a fresh page with the start screen.
       () => window.location.reload(),
+      this.mobileInput.active,
     );
     this.pauseOverlay = this.createPauseOverlay();
     this.createSettingsPanel();
+    // No keyboard on a phone to hit space with — a tap anywhere that isn't
+    // one of the touch controls toggles pause instead.
+    this.mobileInput.setOnBackgroundTap(() => this.setPaused(!this.paused));
 
     if (import.meta.env.DEV) {
       this.setupDebugGui();
@@ -392,6 +396,7 @@ export class Game {
    * world is frozen.
    */
   private createPauseOverlay(): HTMLDivElement {
+    const mobile = this.mobileInput.active;
     const overlay = document.createElement("div");
     overlay.style.cssText = [
       "position:fixed",
@@ -414,10 +419,31 @@ export class Game {
     title.textContent = "PAUSED";
 
     const hint = document.createElement("div");
-    hint.textContent = "press spacebar to resume";
+    hint.textContent = mobile ? "tap anywhere to resume" : "press spacebar to resume";
     hint.style.cssText = "font:400 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.08em;opacity:0.85";
 
-    overlay.append(title, hint);
+    const quit = document.createElement("button");
+    quit.textContent = "Quit to menu";
+    quit.style.cssText = [
+      // The overlay itself is pointer-events:none so a tap anywhere on it
+      // still reaches the background-tap-to-resume catcher underneath —
+      // only this button opts back in.
+      "pointer-events:auto",
+      "margin-top:16px",
+      "appearance:none",
+      "cursor:pointer",
+      "font:600 14px/1 ui-monospace,SFMono-Regular,Menlo,monospace",
+      "letter-spacing:0.1em",
+      "text-transform:uppercase",
+      "padding:10px 22px",
+      "border-radius:6px",
+      "background:transparent",
+      "color:#fff",
+      "border:2px solid rgba(255,255,255,0.7)",
+    ].join(";");
+    quit.addEventListener("click", () => window.location.reload());
+
+    overlay.append(title, hint, quit);
     document.body.appendChild(overlay);
     return overlay;
   }
@@ -478,7 +504,9 @@ export class Game {
     });
 
     panel.append(title, label, hint);
-    document.body.appendChild(panel);
+    // Hidden on touch devices for now: it sits over the GAS pedal at this
+    // screen size. Put it back once the mobile layout is finalized.
+    if (!this.mobileInput.active) document.body.appendChild(panel);
   }
 
   private setPaused(paused: boolean): void {
@@ -486,6 +514,7 @@ export class Game {
     this.paused = paused;
     this.pauseOverlay.style.display = paused ? "flex" : "none";
     this.engineAudio.setPaused(paused);
+    this.mobileInput.setPaused(paused);
   }
 
   /**

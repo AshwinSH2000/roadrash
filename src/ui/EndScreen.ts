@@ -37,28 +37,35 @@ export class EndScreen {
   constructor(
     private readonly onRaceAgain: () => void,
     private readonly onChangeSettings: () => void,
+    mobile = false,
   ) {
     this.root = overlay(30, 0.55);
-    this.root.style.gap = "18px";
+    this.root.style.gap = mobile ? "10px" : "18px";
 
     this.headline = el(
       "div",
-      `font:900 72px/1 ${DISPLAY};letter-spacing:0.15em;text-transform:uppercase;text-shadow:0 4px 24px rgba(0,0,0,0.8)`,
+      `font:900 ${mobile ? 40 : 72}px/1 ${DISPLAY};letter-spacing:0.15em;text-transform:uppercase;text-shadow:0 4px 24px rgba(0,0,0,0.8)`,
     );
-    this.subline = el("div", `font:500 18px/1.4 ${MONO};opacity:0.85;text-align:center`);
+    this.subline = el("div", `font:500 ${mobile ? 13 : 18}px/1.4 ${MONO};opacity:0.85;text-align:center`);
     this.table = el(
       "div",
-      `display:grid;grid-template-columns:auto auto auto;gap:6px 22px;font:400 15px/1.4 ${MONO};margin-top:8px;padding:14px 22px;background:rgba(0,0,0,0.35);border-radius:8px`,
+      `display:grid;grid-template-columns:auto auto auto;gap:${mobile ? "4px 14px" : "6px 22px"};font:400 ${mobile ? 11 : 15}px/1.4 ${MONO};margin-top:${mobile ? 4 : 8}px;padding:${mobile ? "8px 14px" : "14px 22px"};background:rgba(0,0,0,0.35);border-radius:8px`,
     );
 
-    const buttons = el("div", "display:flex;gap:16px;margin-top:14px");
+    const buttons = el("div", `display:flex;gap:${mobile ? 10 : 16}px;margin-top:${mobile ? 8 : 14}px`);
     const again = button("Race again", true);
     again.addEventListener("click", () => this.onRaceAgain());
     const settings = button("Change settings", false);
     settings.addEventListener("click", () => this.onChangeSettings());
+    if (mobile) {
+      for (const b of [again, settings]) {
+        b.style.font = `700 13px/1 ${DISPLAY}`;
+        b.style.padding = "10px 18px";
+      }
+    }
     buttons.append(again, settings);
 
-    const hint = el("div", `font:400 12px/1 ${MONO};opacity:0.5;letter-spacing:0.15em`, "ENTER = race again");
+    const hint = el("div", `font:400 ${mobile ? 10 : 12}px/1 ${MONO};opacity:0.5;letter-spacing:0.15em`, "ENTER = race again");
 
     this.root.append(this.headline, this.subline, this.table, buttons, hint);
     document.body.appendChild(this.root);

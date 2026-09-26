@@ -1,4 +1,5 @@
 import type { InputManager } from "../core/InputManager";
+import type { MobileInputManager } from "../core/MobileInputManager";
 import type { Bike } from "./Bike";
 import type { Driver, Racer } from "./Racer";
 import type { CombatSystem } from "../combat/CombatSystem";
@@ -16,6 +17,10 @@ const NITRO_KEY = "KeyN";
 const SHIFT_DOWN_KEY = "KeyQ";
 const SHIFT_UP_KEY = "KeyE";
 
+function clamp(value: number): number {
+  return Math.max(-1, Math.min(1, value));
+}
+
 /**
  * Maps raw keyboard input to bike throttle/steer input each fixed physics step.
  *
@@ -30,13 +35,20 @@ export class PlayerController implements Driver {
     private readonly combat: CombatSystem,
     private readonly self: Racer,
     private readonly nitro: Nitro,
+    private readonly mobile: MobileInputManager | null = null,
   ) {}
 
   tick(): void {
     // Same entry point the AI's combat behaviour will use next phase.
-    if (this.input.wasJustPressed(PUNCH_KEY)) this.combat.request(this.self, AttackKind.PUNCH);
-    if (this.input.wasJustPressed(KICK_KEY)) this.combat.request(this.self, AttackKind.KICK);
-    if (this.input.wasJustPressed(NITRO_KEY)) this.nitro.tryActivate();
+    if (this.input.wasJustPressed(PUNCH_KEY) || (this.mobile?.wasPunchPressed() ?? false)) {
+      this.combat.request(this.self, AttackKind.PUNCH);
+    }
+    if (this.input.wasJustPressed(KICK_KEY) || (this.mobile?.wasKickPressed() ?? false)) {
+      this.combat.request(this.self, AttackKind.KICK);
+    }
+    if (this.input.wasJustPressed(NITRO_KEY) || (this.mobile?.wasNitroPressed() ?? false)) {
+      this.nitro.tryActivate();
+    }
     if (this.input.wasJustPressed(SHIFT_UP_KEY)) this.bike.controller.shiftUp();
     if (this.input.wasJustPressed(SHIFT_DOWN_KEY)) this.bike.controller.shiftDown();
 
@@ -45,8 +57,13 @@ export class PlayerController implements Driver {
     const steerLeft = this.input.isAnyDown(STEER_LEFT_KEYS) ? 1 : 0;
     const steerRight = this.input.isAnyDown(STEER_RIGHT_KEYS) ? 1 : 0;
 
-    const throttleInput = throttle - brake;
-    const steerInput = steerRight - steerLeft;
+    // Keyboard and touch/tilt are just two sources for the same two axes —
+    // summed and clamped rather than one overriding the other, so nothing
+    // breaks if both happen to be live (e.g. a touch-screen laptop).
+    const keyboardThrottle = throttle - brake;
+    const keyboardSteer = steerRight - steerLeft;
+    const throttleInput = clamp(keyboardThrottle + (this.mobile?.throttle ?? 0));
+    const steerInput = clamp(keyboardSteer + (this.mobile?.steer ?? 0));
 
     this.bike.setInput(throttleInput, steerInput);
   }

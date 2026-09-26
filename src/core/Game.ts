@@ -5,6 +5,7 @@ import { PhysicsWorld } from "../physics/PhysicsWorld";
 import { SurfaceRegistry } from "../physics/TerrainMaterial";
 import { FIXED_DT, FixedStepAccumulator } from "./Clock";
 import { InputManager } from "./InputManager";
+import { MobileInputManager } from "./MobileInputManager";
 import { Bike } from "../entities/Bike";
 import { PlayerController } from "../entities/PlayerController";
 import { BrakeToStopDriver, Racer } from "../entities/Racer";
@@ -98,6 +99,7 @@ export class Game {
   private readonly builtTrack: BuiltTrack;
 
   private readonly input: InputManager;
+  private readonly mobileInput: MobileInputManager;
   private readonly racers: Racer[] = [];
   private readonly player: Racer;
   /** Chassis collider handle -> rider, for resolving finish-line overlaps. */
@@ -204,6 +206,7 @@ export class Game {
     this.buildBikeVisualsFactory();
 
     this.input = new InputManager();
+    this.mobileInput = new MobileInputManager();
     this.player = this.createField();
     this.player.bike.controller.setTransmissionMode(choice.transmission);
 
@@ -217,6 +220,7 @@ export class Game {
       this.combat,
       this.player,
       this.nitro,
+      this.mobileInput,
     );
     this.playerAutopilot = new OpponentAI(
       this.player,
@@ -964,6 +968,7 @@ export class Game {
       this.physics.step();
       for (const racer of this.racers) racer.bike.postPhysicsStep();
       this.input.endStep();
+      this.mobileInput.endStep();
 
       for (const racer of this.racers) racer.updateTrackPosition(this.track);
       if (phase !== RacePhase.COUNTDOWN) {

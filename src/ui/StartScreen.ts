@@ -4,7 +4,7 @@ import {
   type QualityLevel,
 } from "../settings/GraphicsSettings";
 import type { TransmissionMode } from "../physics/Transmission";
-import { requestTiltPermissionFromGesture } from "../core/MobileInputManager";
+import { isTouchDevice, requestTiltPermissionFromGesture } from "../core/MobileInputManager";
 import { DISPLAY, MONO, button, el, overlay } from "./dom";
 
 /**
@@ -64,6 +64,7 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
       transmission: options.initialTransmission ?? "automatic",
     });
   }
+  const touch = isTouchDevice();
   return new Promise((resolve) => {
     const root = overlay(40, 0.72);
     root.style.display = "flex";
@@ -128,8 +129,9 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
     qualityBlock.append(cards, describe);
     selectQuality(quality);
 
-    // --- transmission ------------------------------------------------------
-    let transmission: TransmissionMode = options.initialTransmission ?? "automatic";
+    // --- transmission: mobile has no shift input, so it's automatic-only and
+    // this whole picker is hidden there -----------------------------------
+    let transmission: TransmissionMode = touch ? "automatic" : options.initialTransmission ?? "automatic";
     const transmissionBlock = el("div", "display:flex;flex-direction:column;gap:10px;align-items:center");
     transmissionBlock.appendChild(
       el("div", `font:600 13px/1 ${MONO};letter-spacing:0.2em;opacity:0.75`, "TRANSMISSION"),
@@ -202,7 +204,10 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
       "div",
       `display:flex;flex-wrap:wrap;justify-content:center;gap:6px 22px;font:400 13px/1.5 ${MONO};opacity:0.75;max-width:720px`,
     );
-    for (const [key, action] of CONTROLS) {
+    const visibleControls = touch
+      ? CONTROLS.filter(([key]) => key !== "Q / E" && key !== "T")
+      : CONTROLS;
+    for (const [key, action] of visibleControls) {
       const item = el("div", "display:flex;gap:8px");
       item.append(el("span", "color:#ffd27a", key), el("span", "", action));
       controls.appendChild(item);
@@ -229,7 +234,11 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
     start.addEventListener("click", finish);
     window.addEventListener("keydown", onKey);
 
-    root.append(title, subtitle, qualityBlock, transmissionBlock, courseBlock, controls, start, hint);
+    root.append(
+      ...(touch
+        ? [title, subtitle, qualityBlock, courseBlock, controls, start, hint]
+        : [title, subtitle, qualityBlock, transmissionBlock, courseBlock, controls, start, hint]),
+    );
     document.body.appendChild(root);
     start.focus();
   });

@@ -57,7 +57,11 @@ npm run preview # serve the build locally to check it
 
 Touch and tilt controls (steer by tilting the device, on-screen throttle/
 brake/punch/kick/nitro) kick in automatically on any touch device — nothing
-to configure. To try them on your own phone against the dev server:
+to configure. Transmission is automatic-only there (no shift input on
+touch, so the start screen skips that picker), and pausing shows explicit
+**Resume** / **Recenter** / **Restart** / **Quit Race** buttons rather than
+relying on a tap anywhere to resume. To try them on your own phone against
+the dev server:
 
 ```
 mkcert -install

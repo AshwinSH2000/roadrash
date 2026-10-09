@@ -22,11 +22,13 @@ export const ROAD_SURFACE: SurfaceProperties = {
 
 export const OFFROAD_SURFACE: SurfaceProperties = {
   name: "offroad",
-  frictionSlip: 1.15,
-  // Sized so off-road terminal speed lands around half of on-road: the drag
-  // curve (resistance * speed) meets the engine's falling torque curve at
-  // roughly 20 m/s instead of the ~40 m/s the road allows.
-  rollingResistance: 70,
+  // Grip down to ~62% of road (was ~36%) — leaving the road still costs
+  // real traction, but less harshly than before.
+  frictionSlip: 2.0,
+  // Scaled down by the same ratio as frictionSlip, so the drag penalty eases
+  // off in step with the grip penalty rather than staying disproportionately
+  // harsh. Re-check terminal speed empirically if this still feels off.
+  rollingResistance: 40,
 };
 
 /**

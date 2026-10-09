@@ -34,6 +34,12 @@ import type { RiderPersonality } from "./RiderPersonality";
  * Who may be attacked is a *setting*, not a personality trait: by default the
  * bots fight each other and leave the human alone. The switch that lets them
  * come for the player lives on screen (see `Game.createSettingsPanel`).
+ *
+ * No bot will engage anyone at all for a few seconds after the race starts
+ * (`START_GRACE_MIN`/`MAX`, randomized per bot) — otherwise the dense
+ * starting grid lets the whole pack find targets and start swinging within
+ * the opening seconds, and a human who just rides off slowly gets a free
+ * win over a field that knocked itself down before the race really began.
  */
 
 export interface AiCombatSettings {
@@ -60,6 +66,20 @@ export interface CombatIntent {
 
 /** How often a bot re-evaluates whether anyone is worth a fight, in seconds. */
 const DECISION_INTERVAL = 0.25;
+
+/**
+ * No engaging at all for this many seconds (randomized per bot) after the
+ * lights go out. Without it, the whole grid starts bunched together within
+ * `HUNT_GAP`/`HUNT_WIDTH` of several rivals at once, so — even with
+ * `ENGAGE_CHANCE` being fairly low per decision — the *pack-wide* odds of
+ * someone throwing a punch in the opening seconds are close to certain:
+ * every aggressive bot finds a target immediately and the whole field is on
+ * the ground before a human who simply rides off slowly ever needs to fight
+ * for position. Staggering each bot's own grace period means they don't all
+ * start swinging in the same instant once it lifts, either.
+ */
+const START_GRACE_MIN = 6;
+const START_GRACE_MAX = 11;
 
 /**
  * Chance, per decision with a candidate alongside, that a bot with aggression
@@ -168,6 +188,10 @@ export class CombatBehavior {
   private chaseElapsed = 0;
   private cooldownTimer = 0;
   private decisionTimer = 0;
+  /** Seconds since this bot started racing, counted against `startGrace`. */
+  private raceElapsed = 0;
+  /** This bot's randomized start-of-race no-fighting window — see `START_GRACE_MIN`/`MAX`. */
+  private startGrace: number;
   /**
    * Seconds still to wait, alongside, before a strike may be attempted at
    * all — `null` while not currently alongside (see `STRIKE_DELAY_MIN`/`MAX`
@@ -197,7 +221,9 @@ export class CombatBehavior {
     private readonly settings: Readonly<AiCombatSettings>,
     /** Injectable so headless sims can be seeded and repeatable. */
     private readonly random: () => number = Math.random,
-  ) {}
+  ) {
+    this.startGrace = THREE.MathUtils.lerp(START_GRACE_MIN, START_GRACE_MAX, this.random());
+  }
 
   get currentTarget(): Racer | null {
     return this.target;
@@ -211,9 +237,12 @@ export class CombatBehavior {
     this.cooldownTimer = 0;
     this.decisionTimer = 0;
     this.strikeDelay = null;
+    this.raceElapsed = 0;
+    this.startGrace = THREE.MathUtils.lerp(START_GRACE_MIN, START_GRACE_MAX, this.random());
   }
 
   tick(dtSeconds: number): CombatIntent {
+    this.raceElapsed += dtSeconds;
     this.cooldownTimer -= dtSeconds;
     this.decisionTimer -= dtSeconds;
 
@@ -282,6 +311,7 @@ export class CombatBehavior {
   }
 
   private considerEngaging(): void {
+    if (this.raceElapsed < this.startGrace) return;
     if (this.personality.aggression <= 0) return;
     if (Math.abs(this.self.bike.forwardSpeed) < MIN_ENGAGE_SPEED) return;
 

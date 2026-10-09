@@ -89,6 +89,8 @@ export class MobileInputManager {
   private awaitingZero = false;
   private tiltGranted = false;
   private calibrateButton: HTMLButtonElement | null = null;
+  /** The five on-screen controls that must go dead while paused — everything but fullscreen. */
+  private lockableControls: HTMLElement[] = [];
 
   private punchJustPressed = false;
   private kickJustPressed = false;
@@ -128,6 +130,11 @@ export class MobileInputManager {
     this.onBackgroundTap = callback;
   }
 
+  /** The tilt enable/recenter button, for `Game` to place inside its own pause overlay. */
+  getCalibrateButton(): HTMLButtonElement | null {
+    return this.calibrateButton;
+  }
+
   /** Call once per fixed physics step, mirroring `InputManager.endStep`. */
   endStep(): void {
     this.punchJustPressed = false;
@@ -143,11 +150,9 @@ export class MobileInputManager {
       "position:fixed;inset:0;z-index:15;pointer-events:none;font-family:" + DISPLAY,
     );
 
-    // Appended separately, outside `root`'s stacking context (see
-    // `buildCalibrateButton`) — it only ever shows over the pause tint, and
-    // a child's z-index can't escape its parent's own stacking context, so
-    // it can't live inside `root` (z-index:15) and still out-rank the pause
-    // overlay (z-index:20).
+    // Built here, outside `root`, but `Game.createPauseOverlay` reparents it
+    // into the pause overlay's own flow (between the resume and quit
+    // buttons) the first time that overlay is built.
     this.calibrateButton = this.buildCalibrateButton();
     document.body.appendChild(this.calibrateButton);
 
@@ -184,6 +189,9 @@ export class MobileInputManager {
 
     const fullscreenButton = this.buildFullscreenButton();
 
+    // Fullscreen is deliberately left out — it stays usable while paused.
+    this.lockableControls = [gas, brake, punch, kick, nitro];
+
     root.append(gas, brake, punch, kick, nitro, fullscreenButton);
     document.body.appendChild(root);
 
@@ -192,9 +200,23 @@ export class MobileInputManager {
     this.tryAutoEnableTilt();
   }
 
-  /** Shows the tilt calibrate/enable button only while paused — kept off the playing screen. */
+  /**
+   * Shows the tilt calibrate/enable button only while paused — kept off the
+   * playing screen. Also locks gas/brake/punch/kick/nitro so a tap that
+   * lands on one of them behind the pause overlay doesn't do anything;
+   * fullscreen is left working. Pausing also drops any control that was
+   * mid-press, so a held throttle doesn't silently resume on unpause.
+   */
   setPaused(paused: boolean): void {
     if (this.calibrateButton) this.calibrateButton.style.display = paused ? "block" : "none";
+    for (const control of this.lockableControls) {
+      control.style.pointerEvents = paused ? "none" : "auto";
+      control.style.filter = "";
+    }
+    if (paused) {
+      this.throttleDown = false;
+      this.brakeDown = false;
+    }
   }
 
   /**
@@ -216,25 +238,22 @@ export class MobileInputManager {
     const btn = el(
       "button",
       [
-        "position:fixed",
-        // Above the pause tint (z-index:20) and clear of the "PAUSED" title,
-        // which sits vertically centred.
-        "top:120px",
-        "left:50%",
-        "transform:translateX(-50%)",
-        "z-index:25",
+        // `Game.createPauseOverlay` places this inline, grouped with the
+        // restart/quit buttons below the big "resume" one — no fixed
+        // positioning of its own, and the same outline look as those two
+        // (2px bigger than it used to be) so the only button that stands
+        // out as the primary action is resume.
         "pointer-events:auto",
         "appearance:none",
         "cursor:pointer",
-        `font:800 17px/1 ${MONO}`,
-        "letter-spacing:0.08em",
+        `font:600 16px/1 ${MONO}`,
+        "letter-spacing:0.1em",
         "text-transform:uppercase",
-        "padding:16px 28px",
-        "border-radius:24px",
-        "background:#ff9f1c",
-        "color:#111",
-        "border:2px solid #ff9f1c",
-        "box-shadow:0 4px 18px rgba(0,0,0,0.5)",
+        "padding:10px 22px",
+        "border-radius:6px",
+        "background:transparent",
+        "color:#fff",
+        "border:2px solid rgba(255,255,255,0.7)",
         "-webkit-touch-callout:none",
         "-webkit-user-select:none",
         "-webkit-tap-highlight-color:transparent",
@@ -293,7 +312,7 @@ export class MobileInputManager {
     this.tiltGranted = true;
     this.awaitingZero = true;
     window.addEventListener("deviceorientation", this.onOrientation);
-    if (this.calibrateButton) this.calibrateButton.textContent = "Tap to re-center";
+    if (this.calibrateButton) this.calibrateButton.textContent = "Tap to recenter";
   }
 
   private readonly onOrientation = (event: DeviceOrientationEvent): void => {

@@ -261,8 +261,13 @@ export class Game {
     this.pauseOverlay = this.createPauseOverlay();
     this.createSettingsPanel();
     // No keyboard on a phone to hit space with — a tap anywhere that isn't
-    // one of the touch controls toggles pause instead.
-    this.mobileInput.setOnBackgroundTap(() => this.setPaused(!this.paused));
+    // one of the touch controls pauses instead. One-directional on purpose:
+    // resuming is only ever through the explicit "resume" button, so a
+    // stray tap on the dimmed screen while paused can't accidentally
+    // un-pause the race.
+    this.mobileInput.setOnBackgroundTap(() => {
+      if (!this.paused) this.setPaused(true);
+    });
 
     if (import.meta.env.DEV) {
       this.setupDebugGui();
@@ -406,7 +411,7 @@ export class Game {
       "justify-content:center",
       "flex-direction:column",
       "gap:10px",
-      "background:rgba(0,0,0,0.5)",
+      "background:rgba(0,0,0,0.8)",
       "color:#fff",
       "font:600 44px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace",
       "letter-spacing:0.18em",
@@ -418,21 +423,12 @@ export class Game {
     const title = document.createElement("div");
     title.textContent = "PAUSED";
 
-    const hint = document.createElement("div");
-    hint.textContent = mobile ? "tap anywhere to resume" : "press spacebar to resume";
-    hint.style.cssText = "font:400 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.08em;opacity:0.85";
-
-    const quit = document.createElement("button");
-    quit.textContent = "Quit to menu";
-    quit.style.cssText = [
-      // The overlay itself is pointer-events:none so a tap anywhere on it
-      // still reaches the background-tap-to-resume catcher underneath —
-      // only this button opts back in.
+    // Shared look for every secondary (non-resume) action button.
+    const secondaryButtonStyle = [
       "pointer-events:auto",
-      "margin-top:16px",
       "appearance:none",
       "cursor:pointer",
-      "font:600 14px/1 ui-monospace,SFMono-Regular,Menlo,monospace",
+      "font:600 16px/1 ui-monospace,SFMono-Regular,Menlo,monospace",
       "letter-spacing:0.1em",
       "text-transform:uppercase",
       "padding:10px 22px",
@@ -441,9 +437,60 @@ export class Game {
       "color:#fff",
       "border:2px solid rgba(255,255,255,0.7)",
     ].join(";");
+
+    const quit = document.createElement("button");
+    quit.textContent = "Quit Race";
+    // A little extra separation above it, as the one destructive, "are you
+    // sure" action at the bottom of the stack.
+    quit.style.cssText = `${secondaryButtonStyle};margin-top:16px`;
     quit.addEventListener("click", () => window.location.reload());
 
-    overlay.append(title, hint, quit);
+    if (!mobile) {
+      // Desktop has a keyboard — a plain hint, no button needed.
+      const hint = document.createElement("div");
+      hint.textContent = "press spacebar to resume";
+      hint.style.cssText =
+        "font:400 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.08em;opacity:0.85";
+      overlay.append(title, hint, quit);
+      document.body.appendChild(overlay);
+      return overlay;
+    }
+
+    // Mobile: a big, unambiguous "resume" button is the primary action —
+    // the old plain-text "tap anywhere to resume" hint was easy to miss
+    // next to the (unrelated) recenter button, which used to be just as
+    // big and a brighter color, so thick fingers kept hitting recenter when
+    // they meant to resume. Resume now stands alone as the only button
+    // styled this way; recenter, restart and quit all share the plainer
+    // outline look below it.
+    const resume = document.createElement("button");
+    resume.textContent = "Resume";
+    resume.style.cssText = [
+      "pointer-events:auto",
+      "appearance:none",
+      "cursor:pointer",
+      "font:800 20px/1 ui-monospace,SFMono-Regular,Menlo,monospace",
+      "letter-spacing:0.08em",
+      "text-transform:uppercase",
+      "padding:16px 28px",
+      "border-radius:24px",
+      "background:#ff9f1c",
+      "color:#111",
+      "border:2px solid #ff9f1c",
+      "box-shadow:0 4px 18px rgba(0,0,0,0.5)",
+    ].join(";");
+    resume.addEventListener("click", () => this.setPaused(false));
+
+    const recenter = this.mobileInput.getCalibrateButton();
+
+    const restart = document.createElement("button");
+    restart.textContent = "Restart";
+    restart.style.cssText = secondaryButtonStyle;
+    restart.addEventListener("click", () => this.restartRace());
+
+    overlay.append(title, resume);
+    if (recenter) overlay.append(recenter);
+    overlay.append(restart, quit);
     document.body.appendChild(overlay);
     return overlay;
   }

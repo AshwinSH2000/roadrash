@@ -13,6 +13,8 @@ const STEER_RIGHT_KEYS = ["KeyD", "ArrowRight"];
 const PUNCH_KEY = "KeyP";
 const KICK_KEY = "KeyK";
 const NITRO_KEY = "KeyN";
+const TURBO_KEY = "KeyB";
+const HYPER_KEY = "KeyV";
 /** Manual transmission only — a no-op in automatic (see Transmission.shiftUp/shiftDown). */
 const SHIFT_DOWN_KEY = "KeyQ";
 const SHIFT_UP_KEY = "KeyE";
@@ -49,6 +51,8 @@ export class PlayerController implements Driver {
     if (this.input.wasJustPressed(NITRO_KEY) || (this.mobile?.wasNitroPressed() ?? false)) {
       this.nitro.tryActivate();
     }
+    if (this.input.wasJustPressed(TURBO_KEY)) this.nitro.tryActivate(true);
+    if (this.input.wasJustPressed(HYPER_KEY)) this.nitro.tryActivate(false, true);
     if (this.input.wasJustPressed(SHIFT_UP_KEY)) this.bike.controller.shiftUp();
     if (this.input.wasJustPressed(SHIFT_DOWN_KEY)) this.bike.controller.shiftDown();
 

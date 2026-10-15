@@ -9,7 +9,6 @@
     "preview": "vite preview",
     "check:track": "node scripts/run-sim.mjs track",
     "check:bike": "node scripts/run-sim.mjs fit",
-    "check:rider": "node scripts/run-sim.mjs rider",
     "sim:race": "node scripts/run-sim.mjs race",
     "sim:probe": "node scripts/run-sim.mjs probe",
     "sim:brake": "node scripts/run-sim.mjs brake",

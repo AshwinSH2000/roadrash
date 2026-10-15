@@ -48,9 +48,11 @@ export interface AttackDefinition {
 
 export const PUNCH: AttackDefinition = {
   kind: AttackKind.PUNCH,
-  windup: 0.1,
-  active: 0.1,
-  recovery: 0.32,
+  // The wind-up is the visible draw-and-swing of the baton, which has to be
+  // long enough to read; the hit lands at its end.
+  windup: 0.32,
+  active: 0.12,
+  recovery: 0.36,
   // Tightened from 2.3 m (requested directly: riders were landing hits from
   // too far apart) — see CombatBehavior's STRIKE_LATERAL, which positions a
   // hunting bot within this reach with margin to spare.
@@ -62,8 +64,9 @@ export const PUNCH: AttackDefinition = {
 
 export const KICK: AttackDefinition = {
   kind: AttackKind.KICK,
-  windup: 0.2,
-  active: 0.13,
+  // Long enough to stand on the pegs, chamber the leg and throw it.
+  windup: 0.45,
+  active: 0.15,
   recovery: 0.6,
   // Tightened from 3.0 m — see PUNCH's range comment.
   range: 2.1,

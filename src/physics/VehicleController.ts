@@ -59,6 +59,11 @@ export interface VehicleControllerConfig {
   topSpeedEstimate: number;
   /** How much nitro raises the top speed, in m/s. */
   boostExtraTopSpeed: number;
+  /** Extra top speed (m/s) and force multiplier for the turbo variant of nitro (B key). */
+  turboExtraTopSpeed: number;
+  turboForceMultiplier: number;
+  hyperExtraTopSpeed: number;
+  hyperForceMultiplier: number;
   /** Engine force multiplier while nitro is active — what makes the boost *felt* rather than merely permitted. */
   boostForceMultiplier: number;
   /**
@@ -176,6 +181,10 @@ export const DEFAULT_VEHICLE_CONFIG: VehicleControllerConfig = {
   // creep up to the new limit; the force multiplier is what makes the first
   // second of a boost feel like a kick. Both tuned with `npm run sim:nitro`.
   boostExtraTopSpeed: 20 / 3.6,
+  turboExtraTopSpeed: 60 / 3.6,
+  turboForceMultiplier: 2.4,
+  hyperExtraTopSpeed: 120 / 3.6,
+  hyperForceMultiplier: 3.5,
   boostForceMultiplier: 1.6,
   // Two defences against the spin the telemetry caught, either of which
   // would have prevented it and both of which are kept (see `tick`):
@@ -256,9 +265,13 @@ export class VehicleController {
   private steerInput = 0;
   private currentSurface: SurfaceProperties = DEFAULT_SURFACE;
   private boosting = false;
+  private turbo = false;
+  private hyper = false;
   private handbrake = false;
   private finishBraking = false;
   private riderAttached = true;
+  /** True while the chassis is kinematic and being moved by a script (the rider lifting a fallen bike). */
+  private scripted = false;
   private lastEngineForce = 0;
   private currentSteerLimit = 0;
 
@@ -469,8 +482,22 @@ export class VehicleController {
     this.finishBraking = on;
   }
 
-  setBoost(active: boolean): void {
+  setBoost(active: boolean, turbo = false, hyper = false): void {
     this.boosting = active;
+    this.turbo = active && turbo;
+    this.hyper = active && hyper;
+  }
+
+  private get boostExtraTopSpeed(): number {
+    if (!this.boosting) return 0;
+    if (this.hyper) return this.config.hyperExtraTopSpeed;
+    return this.turbo ? this.config.turboExtraTopSpeed : this.config.boostExtraTopSpeed;
+  }
+
+  private get boostForce(): number {
+    if (!this.boosting) return 1;
+    if (this.hyper) return this.config.hyperForceMultiplier;
+    return this.turbo ? this.config.turboForceMultiplier : this.config.boostForceMultiplier;
   }
 
   get isBoosting(): boolean {
@@ -634,6 +661,7 @@ export class VehicleController {
    * nose into the rising road, into a redirect up the slope.
    */
   private absorbLanding(): void {
+    if (this.scripted) return;
     const cfg = this.config;
     if (cfg.landingAbsorbSpeed <= 0) return;
     for (let i = 0; i < 2; i++) {
@@ -690,6 +718,35 @@ export class VehicleController {
 
   get hasRider(): boolean {
     return this.riderAttached;
+  }
+
+  /**
+   * Takes the chassis out of the physics so a script can move it exactly: the
+   * rider hauling a fallen bike upright. Kinematic, so nothing pushes it
+   * about while it is moved.
+   */
+  beginScriptedMove(): void {
+    this.scripted = true;
+    this.chassisBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.chassisBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.chassisBody.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+  }
+
+  /** Where the chassis should be after the next physics step. Only meaningful between begin and end. */
+  moveScripted(position: THREE.Vector3, rotation: THREE.Quaternion): void {
+    this.chassisBody.setNextKinematicTranslation({ x: position.x, y: position.y, z: position.z });
+    this.chassisBody.setNextKinematicRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w });
+  }
+
+  /** Hands the chassis back to the physics, at rest, where the script left it. */
+  endScriptedMove(position: THREE.Vector3, rotation: THREE.Quaternion): void {
+    if (!this.scripted) return;
+    this.scripted = false;
+    this.chassisBody.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+    this.chassisBody.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
+    this.chassisBody.setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w }, true);
+    this.chassisBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.chassisBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
 
   /**
@@ -904,8 +961,8 @@ export class VehicleController {
       // below — see Transmission.manualDrive for the model. Nitro's extra
       // top speed is passed through as a scale on every gear's own top
       // speed, for the same reason it stretches `topSpeedEstimate` below.
-      const topSpeedScale = 1 + (this.boosting ? cfg.boostExtraTopSpeed / cfg.topSpeedEstimate : 0);
-      const boost = this.boosting ? cfg.boostForceMultiplier : 1;
+      const topSpeedScale = 1 + this.boostExtraTopSpeed / cfg.topSpeedEstimate;
+      const boost = this.boostForce;
       const drive = this.transmission.manualDrive(forwardSpeed, topSpeedScale);
       engineForce = cfg.maxEngineForce * this.throttleInput * drive.forceMultiplier * boost;
       if (drive.overRevBrakeMultiplier > 0) {
@@ -915,10 +972,10 @@ export class VehicleController {
       // Nitro stretches the torque curve out to a higher top speed and
       // multiplies the force under it, so it both permits and delivers the
       // extra speed.
-      const topSpeed = cfg.topSpeedEstimate + (this.boosting ? cfg.boostExtraTopSpeed : 0);
+      const topSpeed = cfg.topSpeedEstimate + this.boostExtraTopSpeed;
       const speedRatio = THREE.MathUtils.clamp(forwardSpeed / topSpeed, 0, 1);
       const torqueCurve = 1 - speedRatio * speedRatio;
-      const boost = this.boosting ? cfg.boostForceMultiplier : 1;
+      const boost = this.boostForce;
       engineForce = cfg.maxEngineForce * this.throttleInput * torqueCurve * boost;
     } else if (this.throttleInput === 0) {
       // Closed throttle: engine braking. Faded out below walking pace so it

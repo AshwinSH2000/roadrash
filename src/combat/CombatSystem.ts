@@ -114,10 +114,16 @@ export class CombatSystem {
     if (!state || !state.definition) {
       return { phase: AttackPhase.IDLE, kind: null, side: 0, cooldown: 0 };
     }
+    // Before the hit resolves `side` is unknown; predict it with the same
+    // targeting, so the swing starts toward whoever it is about to land on.
+    const side =
+      state.side === 0 && state.phase === AttackPhase.WINDUP && racer.rider.isRiding
+        ? this.pickTarget(racer, state).side
+        : state.side;
     return {
       phase: state.phase,
       kind: state.definition.kind,
-      side: state.side,
+      side,
       cooldown: Math.max(0, attackDuration(state.definition) - state.elapsed),
     };
   }
@@ -166,18 +172,10 @@ export class CombatSystem {
     state.canHit = null;
   }
 
-  /**
-   * Looks for a rider inside the strike's cone and knocks them off.
-   *
-   * A strike hits at most one rider — the nearest valid one — however many
-   * physics steps its active window covers. A whiff genuinely does nothing:
-   * the attacker still pays the recovery, which is what makes range and
-   * timing matter rather than making attacks free to spam.
-   */
-  private resolveStrike(attacker: Racer, state: AttackState): void {
+  /** The nearest valid rider inside the attacker's strike cone, and which side of the attacker they're on. */
+  private pickTarget(attacker: Racer, state: AttackState): { best: Racer | null; side: number } {
     const definition = state.definition;
-    if (!definition) return;
-
+    if (!definition) return { best: null, side: 0 };
     const bike = attacker.bike;
     this.tmpForward.copy(LOCAL_FORWARD).applyQuaternion(bike.worldQuaternion).setY(0).normalize();
     this.tmpRight.copy(LOCAL_RIGHT).applyQuaternion(bike.worldQuaternion).setY(0).normalize();
@@ -209,6 +207,23 @@ export class CombatSystem {
         bestSide = side;
       }
     }
+    return { best, side: bestSide };
+  }
+
+  /**
+   * Looks for a rider inside the strike's cone and knocks them off.
+   *
+   * A strike hits at most one rider — the nearest valid one — however many
+   * physics steps its active window covers. A whiff genuinely does nothing:
+   * the attacker still pays the recovery, which is what makes range and
+   * timing matter rather than making attacks free to spam.
+   */
+  private resolveStrike(attacker: Racer, state: AttackState): void {
+    const definition = state.definition;
+    if (!definition) return;
+
+    const bike = attacker.bike;
+    const { best, side: bestSide } = this.pickTarget(attacker, state);
 
     state.side = bestSide;
     if (!best) return;

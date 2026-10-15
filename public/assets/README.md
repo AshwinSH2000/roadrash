@@ -106,51 +106,5 @@ right relative to each other but wrong relative to the suspension travel.
 
 ## Riders
 
-`rider_player.glb` and `rider_ai.glb` are recognised by the loader and loaded,
-but nothing consumes them yet — riders are still capsules. Wiring a rigged
-mesh to the ragdoll's bones is a separate piece of work.
-
----
-
-# Dropping in a rider
-
-The rider comes from **[Mixamo](https://www.mixamo.com/)** (free with an Adobe
-account), because it is the one place that gives you a rigged character *and*
-a matching animation library in one go. Everything goes in
-**`public/assets/rider/`**, as FBX straight from the download dialog — no
-conversion.
-
-## 1. The character — `rider.fbx`
-
-Pick any character on the Characters tab. A realistic human is best; the
-grey **Y Bot** is fine for testing and has the smallest file. If there's a
-motorcycle-racer character in the list, that's the one.
-
-Download with: **Format: FBX Binary · Pose: T-pose** (download the character
-itself, not an animation) · **Skin: With Skin**. Save as `rider.fbx`.
-
-## 2. The animations — one file each
-
-Search the Animations tab for each of these, apply it to the same character,
-and download with **Format: FBX Binary · Skin: Without Skin · 30 fps ·
-Keyframe Reduction: none**:
-
-| Save as | Search for | What it's for |
-| --- | --- | --- |
-| `ride.fbx` | *Driving* (or any seated pose) | On the bike |
-| `idle.fbx` | *Idle* | Standing still |
-| `getup.fbx` | *Getting Up* / *Stand Up* (from lying on the ground) | After a crash |
-| `run.fbx` | *Running* | Chasing the bike |
-| `punch.fbx` | *Punching* (a single jab, not a combo) | P |
-| `kick.fbx` | *Kicking* (a side or front kick) | K |
-
-"Without Skin" matters: it keeps each animation file small (a few hundred
-KB) by leaving out the mesh, which `rider.fbx` already has. All Mixamo
-characters share one skeleton, so any clip fits any character.
-
-## 3. Check it
-
-    npm run check:rider
-
-lists each file's skeleton, height, triangle count and clips, and flags any
-key bone that's missing. Run it before loading the game.
+Riders are built in code (`src/entities/RiderModel.ts`), so there is nothing to
+drop in here. The ragdoll and on-foot runner are still capsules.

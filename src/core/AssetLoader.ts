@@ -11,21 +11,9 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
  * with an empty `public/assets` still runs. That is the point of this whole
  * module — you can drop in a candidate model, look at it, and delete it again,
  * without the game ever failing to start.
- *
- * The rider is split into a character and one file per animation because
- * that is how Mixamo hands them out: the character once "with skin", each
- * clip "without skin" on the same skeleton. FBX is accepted directly so there
- * is no conversion step between the download and the game.
  */
 export const ASSET_PATHS = {
   bike: ["assets/bike.glb"],
-  rider: ["assets/rider/rider.fbx", "assets/rider/rider.glb"],
-  riderRide: ["assets/rider/ride.fbx", "assets/rider/ride.glb"],
-  riderIdle: ["assets/rider/idle.fbx", "assets/rider/idle.glb"],
-  riderGetUp: ["assets/rider/getup.fbx", "assets/rider/getup.glb"],
-  riderRun: ["assets/rider/run.fbx", "assets/rider/run.glb"],
-  riderPunch: ["assets/rider/punch.fbx", "assets/rider/punch.glb"],
-  riderKick: ["assets/rider/kick.fbx", "assets/rider/kick.glb"],
 } as const;
 
 export type AssetKey = keyof typeof ASSET_PATHS;

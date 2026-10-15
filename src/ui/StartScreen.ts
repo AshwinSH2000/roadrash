@@ -50,6 +50,7 @@ const CONTROLS: readonly [string, string][] = [
   ["P", "punch"],
   ["K", "kick"],
   ["N", "nitro"],
+  ["B", "turbo nitro (+60 km/h)"],
   ["Q / E", "shift down/up (manual)"],
   ["T", "manual ⇄ automatic"],
   ["space", "pause"],

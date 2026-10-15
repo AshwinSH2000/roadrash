@@ -6,13 +6,14 @@ import { GROUPS_RIDER } from "./CollisionGroups";
 /**
  * A simplified jointed ragdoll for knocked-off riders.
  *
- * Seven bodies, six spherical joints. The plan's 6–9 range was deliberate and
- * this sits in it: limbs are one segment each rather than upper/lower pairs,
- * because every extra joint is another constraint for the solver to fight
- * over, and at the size a rider occupies on screen an elbow reads as noise.
- * Fewer, heavier bodies also settle far more reliably, and "settles reliably"
- * is the actual requirement — the recovery state machine can't advance until
- * the ragdoll stops moving.
+ * Eleven bodies: pelvis, torso, head, and an upper and lower segment per limb,
+ * joined by ball joints at the shoulders, hips and neck and limited hinges at
+ * the elbows and knees. Limbs were a single capsule each at first, because
+ * every extra joint is another constraint for the solver to fight over and
+ * fewer, heavier bodies settle far more reliably — and "settles reliably" is
+ * the actual requirement, since the recovery state machine can't advance
+ * until the ragdoll stops moving. The hinges are limited so the extra joints
+ * cannot fold the wrong way, and `fall-sim` is what proves they still settle.
  *
  * Nothing about the tumble is scripted. The bodies inherit the rider's
  * velocity at the moment of separation plus whatever impulse knocked them
@@ -23,7 +24,7 @@ import { GROUPS_RIDER } from "./CollisionGroups";
 /** Total rider mass in kg, split across the bodies below. */
 const RIDER_MASS = 78;
 
-interface BoneSpec {
+export interface BoneSpec {
   name: string;
   /** Offset from the pelvis, in the rider's local frame, in metres. */
   offset: THREE.Vector3;
@@ -34,9 +35,19 @@ interface BoneSpec {
   parent?: string;
   anchorOnParent?: THREE.Vector3;
   anchorOnSelf?: THREE.Vector3;
+  /**
+   * Elbows and knees: a hinge about the rider's X axis rather than a ball
+   * joint, limited to this range of angles (radians, right-handed about +X
+   * measured from the straight pose), so limbs fold the way limbs do.
+   */
+  hinge?: { min: number; max: number };
 }
 
-const BONES: readonly BoneSpec[] = [
+/** Knees fold the shin backward and elbows the forearm forward; neither bends the other way. */
+const KNEE_LIMITS = { min: 0, max: 2.5 };
+const ELBOW_LIMITS = { min: -2.5, max: 0 };
+
+export const BONES: readonly BoneSpec[] = [
   { name: "pelvis", offset: new THREE.Vector3(0, 0, 0), halfHeight: 0.1, radius: 0.15, mass: RIDER_MASS * 0.2 },
   {
     name: "torso",
@@ -59,44 +70,88 @@ const BONES: readonly BoneSpec[] = [
     anchorOnSelf: new THREE.Vector3(0, -0.14, 0),
   },
   {
-    name: "armLeft",
-    offset: new THREE.Vector3(0.29, 0.4, 0),
-    halfHeight: 0.19,
+    name: "upperArmLeft",
+    offset: new THREE.Vector3(0.29, 0.5, 0),
+    halfHeight: 0.09,
     radius: 0.07,
-    mass: RIDER_MASS * 0.05,
+    mass: RIDER_MASS * 0.03,
     parent: "torso",
     anchorOnParent: new THREE.Vector3(0.17, 0.14, 0),
-    anchorOnSelf: new THREE.Vector3(0, 0.2, 0),
+    anchorOnSelf: new THREE.Vector3(0, 0.16, 0),
   },
   {
-    name: "armRight",
-    offset: new THREE.Vector3(-0.29, 0.4, 0),
-    halfHeight: 0.19,
+    name: "foreArmLeft",
+    offset: new THREE.Vector3(0.29, 0.2, 0),
+    halfHeight: 0.08,
+    radius: 0.065,
+    mass: RIDER_MASS * 0.02,
+    parent: "upperArmLeft",
+    anchorOnParent: new THREE.Vector3(0, -0.16, 0),
+    anchorOnSelf: new THREE.Vector3(0, 0.145, 0),
+    hinge: ELBOW_LIMITS,
+  },
+  {
+    name: "upperArmRight",
+    offset: new THREE.Vector3(-0.29, 0.5, 0),
+    halfHeight: 0.09,
     radius: 0.07,
-    mass: RIDER_MASS * 0.05,
+    mass: RIDER_MASS * 0.03,
     parent: "torso",
     anchorOnParent: new THREE.Vector3(-0.17, 0.14, 0),
-    anchorOnSelf: new THREE.Vector3(0, 0.2, 0),
+    anchorOnSelf: new THREE.Vector3(0, 0.16, 0),
   },
   {
-    name: "legLeft",
-    offset: new THREE.Vector3(0.13, -0.42, 0),
-    halfHeight: 0.24,
+    name: "foreArmRight",
+    offset: new THREE.Vector3(-0.29, 0.2, 0),
+    halfHeight: 0.08,
+    radius: 0.065,
+    mass: RIDER_MASS * 0.02,
+    parent: "upperArmRight",
+    anchorOnParent: new THREE.Vector3(0, -0.16, 0),
+    anchorOnSelf: new THREE.Vector3(0, 0.145, 0),
+    hinge: ELBOW_LIMITS,
+  },
+  {
+    name: "upperLegLeft",
+    offset: new THREE.Vector3(0.13, -0.3, 0),
+    halfHeight: 0.12,
     radius: 0.09,
-    mass: RIDER_MASS * 0.145,
+    mass: RIDER_MASS * 0.095,
     parent: "pelvis",
     anchorOnParent: new THREE.Vector3(0.11, -0.12, 0),
-    anchorOnSelf: new THREE.Vector3(0, 0.28, 0),
+    anchorOnSelf: new THREE.Vector3(0, 0.21, 0),
   },
   {
-    name: "legRight",
-    offset: new THREE.Vector3(-0.13, -0.42, 0),
-    halfHeight: 0.24,
+    name: "lowerLegLeft",
+    offset: new THREE.Vector3(0.13, -0.7, 0),
+    halfHeight: 0.12,
+    radius: 0.075,
+    mass: RIDER_MASS * 0.05,
+    parent: "upperLegLeft",
+    anchorOnParent: new THREE.Vector3(0, -0.21, 0),
+    anchorOnSelf: new THREE.Vector3(0, 0.195, 0),
+    hinge: KNEE_LIMITS,
+  },
+  {
+    name: "upperLegRight",
+    offset: new THREE.Vector3(-0.13, -0.3, 0),
+    halfHeight: 0.12,
     radius: 0.09,
-    mass: RIDER_MASS * 0.145,
+    mass: RIDER_MASS * 0.095,
     parent: "pelvis",
     anchorOnParent: new THREE.Vector3(-0.11, -0.12, 0),
-    anchorOnSelf: new THREE.Vector3(0, 0.28, 0),
+    anchorOnSelf: new THREE.Vector3(0, 0.21, 0),
+  },
+  {
+    name: "lowerLegRight",
+    offset: new THREE.Vector3(-0.13, -0.7, 0),
+    halfHeight: 0.12,
+    radius: 0.075,
+    mass: RIDER_MASS * 0.05,
+    parent: "upperLegRight",
+    anchorOnParent: new THREE.Vector3(0, -0.21, 0),
+    anchorOnSelf: new THREE.Vector3(0, 0.195, 0),
+    hinge: KNEE_LIMITS,
   },
 ];
 
@@ -119,10 +174,21 @@ const SETTLE_HOLD = 0.45;
  */
 const SETTLE_TIMEOUT = 6;
 
+/** Supplies what each ragdoll body looks like; the default is a plain capsule. */
+export interface RagdollVisuals {
+  create(spec: BoneSpec): THREE.Object3D;
+  dispose(): void;
+}
+
 interface Bone {
   spec: BoneSpec;
   body: RAPIER.RigidBody;
-  mesh: THREE.Mesh;
+  mesh: THREE.Object3D;
+  /** Body transform at the last two ticks, interpolated at render time like the bike's. */
+  prevPos: THREE.Vector3;
+  currPos: THREE.Vector3;
+  prevQuat: THREE.Quaternion;
+  currQuat: THREE.Quaternion;
 }
 
 export class RagdollController {
@@ -139,6 +205,7 @@ export class RagdollController {
     private readonly physics: PhysicsWorld,
     private readonly scene: THREE.Scene,
     private readonly color: number,
+    private readonly visuals: RagdollVisuals | null = null,
   ) {
     this.scene.add(this.group);
   }
@@ -202,17 +269,18 @@ export class RagdollController {
         body,
       );
 
-      const mesh = new THREE.Mesh(
-        new THREE.CapsuleGeometry(spec.radius, spec.halfHeight * 2, 4, 10),
-        new THREE.MeshStandardMaterial({
-          color: spec.name === "head" ? 0xe0c8a0 : this.color,
-          roughness: 0.8,
-        }),
-      );
-      mesh.castShadow = true;
+      const mesh = this.visuals ? this.visuals.create(spec) : this.capsuleVisual(spec);
       this.group.add(mesh);
 
-      const bone: Bone = { spec, body, mesh };
+      const bone: Bone = {
+        spec,
+        body,
+        mesh,
+        prevPos: position.clone(),
+        currPos: position.clone(),
+        prevQuat: orientation.clone(),
+        currQuat: orientation.clone(),
+      };
       this.bones.push(bone);
       byName.set(spec.name, bone);
     }
@@ -222,24 +290,36 @@ export class RagdollController {
       if (!spec.parent || !spec.anchorOnParent || !spec.anchorOnSelf) continue;
       const parent = byName.get(spec.parent);
       if (!parent) continue;
-      this.joints.push(
-        this.physics.world.createImpulseJoint(
-          RAPIER.JointData.spherical(spec.anchorOnParent, spec.anchorOnSelf),
-          parent.body,
-          bone.body,
-          true,
-        ),
-      );
+      const hinge = spec.hinge;
+      const data = hinge
+        ? RAPIER.JointData.revolute(spec.anchorOnParent, spec.anchorOnSelf, { x: 1, y: 0, z: 0 })
+        : RAPIER.JointData.spherical(spec.anchorOnParent, spec.anchorOnSelf);
+      const joint = this.physics.world.createImpulseJoint(data, parent.body, bone.body, true);
+      if (hinge) (joint as RAPIER.RevoluteImpulseJoint).setLimits(hinge.min, hinge.max);
+      this.joints.push(joint);
     }
 
     const torso = byName.get("torso");
     torso?.body.applyImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, true);
   }
 
+  private capsuleVisual(spec: BoneSpec): THREE.Object3D {
+    const mesh = new THREE.Mesh(
+      new THREE.CapsuleGeometry(spec.radius, spec.halfHeight * 2, 4, 10),
+      new THREE.MeshStandardMaterial({
+        color: spec.name === "head" ? 0xe0c8a0 : this.color,
+        roughness: 0.8,
+      }),
+    );
+    mesh.castShadow = true;
+    return mesh;
+  }
+
   /** Advances the settle test. Returns true once the rider may start getting up. */
   tick(dtSeconds: number): boolean {
     if (!this.isActive) return false;
     this.aliveFor += dtSeconds;
+    this.captureBones();
 
     let moving = false;
     for (const bone of this.bones) {
@@ -255,12 +335,31 @@ export class RagdollController {
     return this.stillFor >= SETTLE_HOLD || this.aliveFor >= SETTLE_TIMEOUT;
   }
 
-  syncRender(): void {
+  /**
+   * Shifts each body's current transform into "previous" and reads the new
+   * one. Called once per physics step, before it, so the bodies are as the
+   * last step left them.
+   */
+  private captureBones(): void {
     for (const bone of this.bones) {
+      bone.prevPos.copy(bone.currPos);
+      bone.prevQuat.copy(bone.currQuat);
       const t = bone.body.translation();
       const r = bone.body.rotation();
-      bone.mesh.position.set(t.x, t.y, t.z);
-      bone.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+      bone.currPos.set(t.x, t.y, t.z);
+      bone.currQuat.set(r.x, r.y, r.z, r.w);
+    }
+  }
+
+  /**
+   * Draws the bodies between their last two physics states. Without this a
+   * fast tumble is drawn straight off the 60 Hz physics, which judders on any
+   * display that isn't locked to that rate.
+   */
+  syncRender(alpha: number): void {
+    for (const bone of this.bones) {
+      bone.mesh.position.lerpVectors(bone.prevPos, bone.currPos, alpha);
+      bone.mesh.quaternion.slerpQuaternions(bone.prevQuat, bone.currQuat, alpha);
     }
   }
 
@@ -271,10 +370,21 @@ export class RagdollController {
       // Removing the body removes its colliders with it.
       this.physics.world.removeRigidBody(bone.body);
       this.group.remove(bone.mesh);
-      bone.mesh.geometry.dispose();
-      (bone.mesh.material as THREE.Material).dispose();
+      // Only the plain-capsule fallback owns its geometry and material; custom visuals share theirs.
+      if (!this.visuals) {
+        const mesh = bone.mesh as THREE.Mesh;
+        mesh.geometry.dispose();
+        (mesh.material as THREE.Material).dispose();
+      }
     }
     this.bones = [];
+  }
+
+  /** Despawns and releases everything the controller owns. */
+  dispose(): void {
+    this.despawn();
+    this.visuals?.dispose();
+    this.scene.remove(this.group);
   }
 
   /** Fastest-moving body right now, for diagnosing why a ragdoll won't settle. */
@@ -288,6 +398,23 @@ export class RagdollController {
       angular = Math.max(angular, Math.hypot(w.x, w.y, w.z));
     }
     return { linear, angular };
+  }
+
+  /** Elbow and knee angles right now (radians about the hinge axis), for checking the limits hold. */
+  get hingeAngles(): Array<{ name: string; angle: number }> {
+    const byName = new Map(this.bones.map((b) => [b.spec.name, b]));
+    const out: Array<{ name: string; angle: number }> = [];
+    for (const bone of this.bones) {
+      if (!bone.spec.hinge || !bone.spec.parent) continue;
+      const parent = byName.get(bone.spec.parent);
+      if (!parent) continue;
+      const pr = parent.body.rotation();
+      const cr = bone.body.rotation();
+      const relative = new THREE.Quaternion(pr.x, pr.y, pr.z, pr.w).invert().multiply(new THREE.Quaternion(cr.x, cr.y, cr.z, cr.w));
+      // A hinge about X leaves only the x and w components.
+      out.push({ name: bone.spec.name, angle: 2 * Math.atan2(relative.x, relative.w) });
+    }
+    return out;
   }
 
   /** Number of live bodies — asserted to return to zero after teardown. */

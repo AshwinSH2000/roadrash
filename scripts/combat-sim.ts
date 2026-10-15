@@ -229,8 +229,10 @@ async function main(): Promise<void> {
   const impulses: number[] = [];
   for (const closing of [0, 5, 10]) {
     const towardAttacker = LOCAL_RIGHT.clone().multiplyScalar(-closing);
-    // Also well inside the punch's 1.6 m range — see the arc test above.
-    const { hit } = await attempt(arcTestSeparation, 0, AttackKind.PUNCH, {
+    // Starts far enough back that the victim has closed to the arc test's
+    // 1.2 m (well inside the punch's 1.6 m range) just as the wind-up ends,
+    // which is when the hit is resolved.
+    const { hit } = await attempt(arcTestSeparation + closing * ATTACKS[AttackKind.PUNCH].windup, 0, AttackKind.PUNCH, {
       attacker: new THREE.Vector3(0, 0, 0),
       victim: towardAttacker,
     });

@@ -8,7 +8,6 @@
  *   npm run sim:probe   direction/sign ground-truth probe
  *   npm run sim:brake   braking deceleration vs. brakeForce
  *   npm run check:bike  fit a downloaded bike model to the physics bike
- *   npm run check:rider inspect downloaded rider character/animation files
  */
 import { build } from "esbuild";
 import { mkdirSync, rmSync } from "node:fs";
@@ -28,7 +27,6 @@ const entries = {
   aicombat: "ai-combat-sim.ts",
   flow: "flow-sim.ts",
   fit: "bike-fit.ts",
-  rider: "rider-inspect.ts",
   spin: "spin-probe.ts",
   nitro: "nitro-probe.ts",
   oversteer: "oversteer-probe.ts",
@@ -38,6 +36,11 @@ const entries = {
   climb: "climb-probe.ts",
   hole: "hole-probe.ts",
   manual: "manual-transmission-sim.ts",
+  hinges: "ragdoll-hinge-probe.ts",
+  wheeljitter: "wheel-jitter-probe.ts",
+  pickup: "pickup-probe.ts",
+  ridepose: "rider-pose-probe.ts",
+  ridesteer: "rider-steer-probe.ts",
 };
 const entry = entries[which];
 if (!entry) {

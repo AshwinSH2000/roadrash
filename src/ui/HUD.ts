@@ -75,7 +75,7 @@ export interface HudData {
   /** 0..1 along the race distance. */
   progress: number;
   standings: readonly HudStanding[];
-  nitro: { charge: number; state: NitroState };
+  nitro: { charge: number; state: NitroState; turbo: boolean };
   combat: { kind: AttackKind; phase: AttackPhase; cooldown: number } | null;
   /** True while the player is off the bike, so the HUD can say so. */
   recovering: boolean;
@@ -173,7 +173,7 @@ export class HUD {
         : `position:fixed;left:16px;bottom:24px;width:${nitroWidth}px;height:14px;border:2px solid rgba(255,255,255,0.8);border-radius:4px;background:${PANEL_BG};pointer-events:none;z-index:10;box-sizing:border-box`,
     );
     this.nitroFill = el("div", "height:100%;width:100%;background:#3ddc84;transition:width 80ms linear");
-    this.nitroLabel = el("div", `position:absolute;left:0;top:-18px;font:12px/1 ${MONO};color:#fff;letter-spacing:0.08em`, "NITRO  [N]");
+    this.nitroLabel = el("div", `position:absolute;left:0;top:-18px;font:12px/1 ${MONO};color:#fff;letter-spacing:0.08em`, "NITRO [N]  TURBO [B]");
     nitro.append(this.nitroFill, this.nitroLabel);
     if (mobile) bottom.appendChild(nitro);
     else this.add(nitro);
@@ -253,11 +253,11 @@ export class HUD {
     switch (d.nitro.state) {
       case NitroState.READY:
         this.nitroFill.style.background = "#3ddc84";
-        this.nitroLabel.textContent = "NITRO  [N]  ready";
+        this.nitroLabel.textContent = "NITRO [N]  TURBO [B]  ready";
         break;
       case NitroState.ACTIVE:
-        this.nitroFill.style.background = "#ff9f1c";
-        this.nitroLabel.textContent = "NITRO  boosting";
+        this.nitroFill.style.background = d.nitro.turbo ? "#ff3b30" : "#ff9f1c";
+        this.nitroLabel.textContent = d.nitro.turbo ? "TURBO  boosting" : "NITRO  boosting";
         break;
       case NitroState.RECHARGING:
         this.nitroFill.style.background = "#6b7280";

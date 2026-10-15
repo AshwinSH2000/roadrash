@@ -18,7 +18,7 @@ import { EndScreen } from "../ui/EndScreen";
 import type { StartChoice } from "../ui/StartScreen";
 import { QUALITY_PRESETS } from "../settings/GraphicsSettings";
 import { GRID_COLUMNS, GRID_ROWS, PLAYER_GRID_SLOT, gridPose } from "../track/StartGrid";
-import { attackDuration, ATTACKS } from "../combat/AttackDefinitions";
+import { attackDuration, ATTACKS, AttackKind } from "../combat/AttackDefinitions";
 import { ChaseCamera } from "../camera/ChaseCamera";
 import { EngineAudio } from "../audio/EngineAudio";
 import { ROAD_HALF_WIDTH, TrackDefinition } from "../track/TrackDefinition";
@@ -306,12 +306,6 @@ export class Game {
    * console of exactly which node it couldn't find.
    */
   private buildBikeVisualsFactory(): void {
-    if (!this.assets.has("rider")) {
-      console.info(
-        "[assets] no rider model yet — riders are invisible on the bike and capsules on foot. " +
-          "Run `npm run check:rider` for the download steps (Mixamo, free), or see TODO.md.",
-      );
-    }
     const asset = this.assets.get("bike");
     if (!asset) {
       this.bikeVisuals = createPlaceholderBikeVisuals;
@@ -445,17 +439,6 @@ export class Game {
     quit.style.cssText = `${secondaryButtonStyle};margin-top:16px`;
     quit.addEventListener("click", () => window.location.reload());
 
-    if (!mobile) {
-      // Desktop has a keyboard — a plain hint, no button needed.
-      const hint = document.createElement("div");
-      hint.textContent = "press spacebar to resume";
-      hint.style.cssText =
-        "font:400 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.08em;opacity:0.85";
-      overlay.append(title, hint, quit);
-      document.body.appendChild(overlay);
-      return overlay;
-    }
-
     // Mobile: a big, unambiguous "resume" button is the primary action —
     // the old plain-text "tap anywhere to resume" hint was easy to miss
     // next to the (unrelated) recenter button, which used to be just as
@@ -489,6 +472,14 @@ export class Game {
     restart.addEventListener("click", () => this.restartRace());
 
     overlay.append(title, resume);
+    if (!mobile) {
+      // Desktop also has a keyboard shortcut — keep the hint under the button.
+      const hint = document.createElement("div");
+      hint.textContent = "or press spacebar";
+      hint.style.cssText =
+        "font:400 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.08em;opacity:0.85";
+      overlay.append(hint);
+    }
     if (recenter) overlay.append(recenter);
     overlay.append(restart, quit);
     document.body.appendChild(overlay);
@@ -606,7 +597,7 @@ export class Game {
       raceTime: this.flow.raceElapsed,
       progress: raced / this.track.raceLength,
       standings,
-      nitro: { charge: this.nitro.charge, state: this.nitro.current },
+      nitro: { charge: this.nitro.charge, state: this.nitro.current, turbo: this.nitro.isTurbo },
       combat: combat.kind === null ? null : { kind: combat.kind, phase: combat.phase, cooldown: combat.cooldown },
       recovering: !player.rider.isRiding,
       secondsToDnf:
@@ -824,28 +815,20 @@ export class Game {
     );
   }
 
-  /** Drives each rider's strike indicator from their combat state. */
+  /** Drives each rider's baton swing / standing kick from their combat state. */
   private syncStrikeVisuals(): void {
     for (const racer of this.racers) {
       const snapshot = this.combat.snapshot(racer);
       if (snapshot.phase === AttackPhase.IDLE || snapshot.kind === null) {
-        racer.bike.setStrike(0, 0);
+        racer.rider.setAttack(null, 0, 0, ATTACKS[AttackKind.PUNCH]);
         continue;
       }
       const definition = ATTACKS[snapshot.kind];
-      const total = attackDuration(definition);
-      const progress = 1 - snapshot.cooldown / total;
-      // Punch out through wind-up and the live window, pull back through
-      // recovery — so what you see matches when the strike can actually land.
-      const strikeEnd = (definition.windup + definition.active) / total;
-      const extension =
-        progress <= strikeEnd
-          ? progress / strikeEnd
-          : Math.max(0, 1 - (progress - strikeEnd) / (1 - strikeEnd));
-      // Before a target is picked, `side` is 0; throw on the side the rider
-      // is leaning toward so the wind-up reads as intent.
+      const elapsed = attackDuration(definition) - snapshot.cooldown;
+      // With no target in reach `side` is 0; throw on the side the rider is
+      // leaning toward so the swing still reads as intent.
       const side = snapshot.side !== 0 ? snapshot.side : racer.bike.leanAngle >= 0 ? 1 : -1;
-      racer.bike.setStrike(side, 0.35 + extension * (definition.range * 0.35));
+      racer.rider.setAttack(snapshot.kind, side, elapsed, definition);
     }
   }
 
@@ -1037,7 +1020,7 @@ export class Game {
         // gated on riding, via the controller ignoring boost without throttle.
         this.nitro.tick(FIXED_DT);
         for (const racer of this.racers) racer.tickDriver(FIXED_DT);
-        this.player.bike.controller.setBoost(this.nitro.isActive);
+        this.player.bike.controller.setBoost(this.nitro.isActive, this.nitro.isTurbo, this.nitro.isHyper);
       }
       this.combat.tick(FIXED_DT);
       for (const racer of this.racers) racer.bike.prePhysicsStep(FIXED_DT);
@@ -1081,7 +1064,7 @@ export class Game {
     const frameDelta = this.accumulator.frameDelta;
     for (const racer of this.racers) {
       racer.bike.syncRender(this.accumulator.alpha, frameDelta);
-      racer.rider.syncRender();
+      racer.rider.syncRender(this.accumulator.alpha);
     }
     // The camera watches the rider, not the bike, once they've been thrown off.
     this.chaseCamera.update(this.player.bike, this.player.rider.cameraPosition, frameDelta);

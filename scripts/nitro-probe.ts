@@ -28,10 +28,10 @@ async function makeBike(): Promise<{ bike: Bike; physics: PhysicsWorld }> {
   return { bike: new Bike(physics, surfaces, new THREE.Scene(), new THREE.Vector3(0, 1, 0)), physics };
 }
 
-function stepFor(bike: Bike, physics: PhysicsWorld, seconds: number, throttle: number, boost: boolean, onStep?: (t: number) => void): void {
+function stepFor(bike: Bike, physics: PhysicsWorld, seconds: number, throttle: number, boost: boolean, onStep?: (t: number) => void, turbo = false): void {
   const n = Math.round(seconds / FIXED_DT);
   for (let i = 0; i < n; i++) {
-    bike.controller.setBoost(boost);
+    bike.controller.setBoost(boost, turbo);
     bike.setInput(throttle, 0);
     bike.prePhysicsStep(FIXED_DT);
     physics.step();
@@ -72,6 +72,20 @@ async function main(): Promise<void> {
     if (gain < 17 || gain > 24) problems.push(`Nitro gained ${gain.toFixed(1)} km/h at top speed; want about 20.`);
     if (timeToPlus15 > 3.5) problems.push(`Took ${timeToPlus15.toFixed(1)} s to gain 15 km/h; the boost should be felt well inside its 5 s.`);
     if (after - base > 3 / 3.6) problems.push(`Speed ${kmh(after)} km/h stayed high after the boost ended.`);
+
+    // Turbo (B key): same bar, +60 km/h at the top end.
+    {
+      const t = await makeBike();
+      stepFor(t.bike, t.physics, 40, 1, false);
+      const tBase = t.bike.forwardSpeed;
+      let tPeak = tBase;
+      stepFor(t.bike, t.physics, NITRO_DRAIN_SECONDS, 1, true, () => {
+        tPeak = Math.max(tPeak, t.bike.forwardSpeed);
+      }, true);
+      console.log(`turbo: peak ${kmh(tPeak)} km/h (+${kmh(tPeak - tBase)}) from ${kmh(tBase)}`);
+      const tGain = (t.bike.forwardSpeed - tBase) * 3.6;
+      if (tGain < 50 || tGain > 66) problems.push(`Turbo gained ${tGain.toFixed(1)} km/h at the end of 5 s; want about 60.`);
+    }
 
     // From a slow roll: the kick should be obvious.
     const slow = await makeBike();

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { GRIP, type RiderModel } from "./RiderModel";
 import type { PhysicsWorld } from "../physics/PhysicsWorld";
 import type { SurfaceRegistry } from "../physics/TerrainMaterial";
 import { VehicleController, DEFAULT_VEHICLE_CONFIG } from "../physics/VehicleController";
@@ -57,6 +58,11 @@ export class Bike {
 
   private readonly tmpDown = new THREE.Vector3();
   private readonly tmpSteerQuat = new THREE.Quaternion();
+  private riderHands: RiderModel | null = null;
+  /** Grip positions in the steering assembly's own frame; set by `attachRiderHands`. */
+  private gripAnchors: [THREE.Vector3, THREE.Vector3] | null = null;
+  private readonly tmpGripLeft = new THREE.Vector3();
+  private readonly tmpGripRight = new THREE.Vector3();
   private readonly tmpSpinQuat = new THREE.Quaternion();
   private readonly tmpPitchQuat = new THREE.Quaternion();
   private readonly tmpSlope = new THREE.Vector3();
@@ -65,6 +71,21 @@ export class Bike {
   private readonly tmpForward = new THREE.Vector3();
   private readonly tmpPivot = new THREE.Vector3();
   private readonly tmpRelative = new THREE.Vector3();
+  /**
+   * Wheel state at the last two physics steps, interpolated in `syncRender`
+   * exactly like the chassis. Reading the wheels straight off the physics
+   * every frame instead leaves them up to one step (~0.7 m at 40 m/s) ahead
+   * of the interpolated body by an amount that changes with every frame's
+   * alpha, which is a tyre jitter at any display rate that isn't 60 Hz.
+   */
+  private readonly prevWheelCenters: [THREE.Vector3, THREE.Vector3] = [new THREE.Vector3(), new THREE.Vector3()];
+  private readonly currWheelCenters: [THREE.Vector3, THREE.Vector3] = [new THREE.Vector3(), new THREE.Vector3()];
+  private readonly wheelCenterValid: [boolean, boolean] = [false, false];
+  private readonly prevWheelSpin: [number, number] = [0, 0];
+  private readonly currWheelSpin: [number, number] = [0, 0];
+  private snapWheelsNextStep = false;
+  private prevSteer = 0;
+  private currSteer = 0;
   private readonly wheelCenters: [THREE.Vector3, THREE.Vector3] = [
     new THREE.Vector3(),
     new THREE.Vector3(),
@@ -110,6 +131,8 @@ export class Bike {
 
     this.captureTransform(this.prevPos, this.prevQuat);
     this.captureTransform(this.currPos, this.currQuat);
+    this.captureWheels();
+    this.snapshotPrevWheels();
   }
 
   setInput(throttleInput: number, steerInput: number): void {
@@ -167,6 +190,66 @@ export class Bike {
     this.strikeMesh.position.set(-side * reach, 0.35, 0.15);
   }
 
+  /**
+   * Makes the rider's hands follow the handlebar. Each grip is pinned to the
+   * steering assembly: its rest position is converted into the assembly's own
+   * frame once, and then re-expressed in the bike's frame every frame as the
+   * assembly turns. A model with no steering assembly keeps the hands fixed.
+   */
+  attachRiderHands(rider: RiderModel): void {
+    const assembly = this.visuals.frontAssembly?.object;
+    if (!assembly) return;
+    this.riderHands = rider;
+    // Rest frame: assembly straightened, so the inverse chain maps group space into it.
+    assembly.quaternion.identity();
+    const toGroup = this.assemblyToGroup(assembly);
+    const toAssembly = toGroup.clone().invert();
+    this.gripAnchors = [
+      GRIP.clone().applyMatrix4(toAssembly),
+      GRIP.clone().setX(-GRIP.x).applyMatrix4(toAssembly),
+    ];
+  }
+
+  /** Matrix taking `object`'s local space to this bike group's space, from current local transforms. */
+  private assemblyToGroup(object: THREE.Object3D): THREE.Matrix4 {
+    const result = new THREE.Matrix4().identity();
+    for (let node: THREE.Object3D | null = object; node && node !== this.group; node = node.parent) {
+      node.updateMatrix();
+      result.premultiply(node.matrix);
+    }
+    return result;
+  }
+
+  /** A rider starts lifting the fallen bike: the physics lets go of the chassis. See `VehicleController.beginScriptedMove`. */
+  beginLift(): void {
+    this.controller.beginScriptedMove();
+  }
+
+  /** Moves the lifted chassis to this pose by the next physics step. */
+  liftTo(position: THREE.Vector3, rotation: THREE.Quaternion): void {
+    this.controller.moveScripted(position, rotation);
+  }
+
+  /** Puts the chassis back under the physics at this pose, at rest. */
+  endLift(position: THREE.Vector3, rotation: THREE.Quaternion): void {
+    this.controller.endScriptedMove(position, rotation);
+  }
+
+  /**
+   * World position of a handlebar grip as drawn this frame; `sign` is +1 for
+   * the bike's left grip, -1 for its right. Reads the rendered group, so call
+   * it after `syncRender`.
+   */
+  gripWorld(sign: number, out: THREE.Vector3): THREE.Vector3 {
+    this.group.updateMatrixWorld(true);
+    return out.set(GRIP.x * sign, GRIP.y, GRIP.z).applyMatrix4(this.group.matrixWorld);
+  }
+
+  /** Parents something to the bike's group so it rides with the chassis, lean and pitch included. */
+  addRiderObject(object: THREE.Object3D): void {
+    this.group.add(object);
+  }
+
   /** See `VehicleController.setRiderAttached` — releases the tip-over locks when riderless. */
   setRiderAttached(attached: boolean): void {
     this.controller.setRiderAttached(attached);
@@ -198,12 +281,44 @@ export class Bike {
   prePhysicsStep(dt: number): void {
     this.prevPos.copy(this.currPos);
     this.prevQuat.copy(this.currQuat);
+    this.snapshotPrevWheels();
     this.controller.tick(dt);
   }
 
   /** Call after `physics.step()`: captures the newly-integrated transform. */
   postPhysicsStep(): void {
     this.captureTransform(this.currPos, this.currQuat);
+    this.captureWheels();
+    if (this.snapWheelsNextStep) {
+      this.snapWheelsNextStep = false;
+      this.snapshotPrevWheels();
+    }
+  }
+
+  /** Reads the wheel centres, spin and steer from the physics into the "current" slots. */
+  private captureWheels(): void {
+    this.tmpDown.copy(LOCAL_DOWN).applyQuaternion(this.currQuat);
+    for (let i = 0; i < 2; i++) {
+      const index = i as 0 | 1;
+      const hardPoint = this.controller.wheelHardPoint(index);
+      this.wheelCenterValid[i] = hardPoint !== null;
+      if (hardPoint) {
+        this.currWheelCenters[i]
+          .copy(hardPoint)
+          .addScaledVector(this.tmpDown, this.controller.wheelSuspensionLength(index));
+      }
+      this.currWheelSpin[i] = this.controller.wheelRotation(index);
+    }
+    this.currSteer = this.controller.steerAngle;
+  }
+
+  /** Copies the "current" wheel state into the "previous" slots, as the step begins. */
+  private snapshotPrevWheels(): void {
+    this.prevWheelCenters[0].copy(this.currWheelCenters[0]);
+    this.prevWheelCenters[1].copy(this.currWheelCenters[1]);
+    this.prevWheelSpin[0] = this.currWheelSpin[0];
+    this.prevWheelSpin[1] = this.currWheelSpin[1];
+    this.prevSteer = this.currSteer;
   }
 
   /**
@@ -216,6 +331,8 @@ export class Bike {
     this.controller.respawnAt(position, rotation);
     this.captureTransform(this.prevPos, this.prevQuat);
     this.captureTransform(this.currPos, this.currQuat);
+    // The wheel hard points are stale until the next step; snap rather than interpolate across the map.
+    this.snapWheelsNextStep = true;
   }
 
   private captureTransform(outPos: THREE.Vector3, outQuat: THREE.Quaternion): void {
@@ -315,14 +432,12 @@ export class Bike {
     let pivotSamples = 0;
     for (let i = 0; i < 2; i++) {
       const index = i as 0 | 1;
-      const hardPoint = this.controller.wheelHardPoint(index);
-      if (!hardPoint) continue;
-      const suspensionLength = this.controller.wheelSuspensionLength(index);
-
+      if (!this.wheelCenterValid[i]) continue;
+      // Interpolated like the chassis, so the wheels stay put relative to the body.
+      this.wheelCenters[i].lerpVectors(this.prevWheelCenters[i], this.currWheelCenters[i], alpha);
       this.tmpDown.copy(LOCAL_DOWN).applyQuaternion(this.renderQuat);
-      this.wheelCenters[i].copy(hardPoint).addScaledVector(this.tmpDown, suspensionLength);
 
-      const steerAngle = index === 0 ? this.controller.steerAngle : 0;
+      const steerAngle = index === 0 ? THREE.MathUtils.lerp(this.prevSteer, this.currSteer, alpha) : 0;
       // NEGATED, and measured rather than derived: `steerAngle` is positive
       // for a right turn (VehicleController: `steerInput * maxAngle`, and
       // steerInput = +1 turns right, see utils/Directions). But a positive
@@ -333,7 +448,7 @@ export class Bike {
       // The axis is the model's fork axis when it supplied one, so the wheel
       // cambers as it turns like a real one; vertical otherwise.
       this.tmpSteerQuat.setFromAxisAngle(this.visuals.steeringAxis, -steerAngle);
-      this.tmpSpinQuat.setFromAxisAngle(X_AXIS, this.controller.wheelRotation(index));
+      this.tmpSpinQuat.setFromAxisAngle(X_AXIS, THREE.MathUtils.lerp(this.prevWheelSpin[i], this.currWheelSpin[i], alpha));
       this.wheelQuats[i].copy(this.renderQuat).multiply(this.tmpSteerQuat).multiply(this.tmpSpinQuat);
 
       // Tyre contact patch = wheel centre, one radius further down.
@@ -365,6 +480,14 @@ export class Bike {
     const assembly = this.visuals.frontAssembly;
     if (!assembly) return;
     assembly.object.quaternion.setFromAxisAngle(assembly.axis, -this.controller.steerAngle);
+
+    if (this.riderHands && this.gripAnchors) {
+      const toGroup = this.assemblyToGroup(assembly.object);
+      this.riderHands.setGrips(
+        this.tmpGripLeft.copy(this.gripAnchors[0]).applyMatrix4(toGroup),
+        this.tmpGripRight.copy(this.gripAnchors[1]).applyMatrix4(toGroup),
+      );
+    }
   }
 
   /**

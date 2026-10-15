@@ -27,6 +27,9 @@ export class Nitro {
   private state = NitroState.READY;
   /** 0..1 — full when ready, falling while active, rising while recharging. */
   private level = 1;
+  /** Fired with B rather than N: same bar and timings, much bigger kick. */
+  private turbo = false;
+  private hyper = false;
 
   get charge(): number {
     return this.level;
@@ -40,13 +43,23 @@ export class Nitro {
     return this.state === NitroState.ACTIVE;
   }
 
+  get isTurbo(): boolean {
+    return this.state === NitroState.ACTIVE && this.turbo;
+  }
+
+  get isHyper(): boolean {
+    return this.state === NitroState.ACTIVE && this.hyper;
+  }
+
   get isReady(): boolean {
     return this.state === NitroState.READY;
   }
 
   /** Fires the boost if the bar is full. Returns whether it did. */
-  tryActivate(): boolean {
+  tryActivate(turbo = false, hyper = false): boolean {
     if (this.state !== NitroState.READY) return false;
+    this.turbo = turbo;
+    this.hyper = hyper;
     this.state = NitroState.ACTIVE;
     return true;
   }
@@ -76,5 +89,7 @@ export class Nitro {
   reset(): void {
     this.state = NitroState.READY;
     this.level = 1;
+    this.turbo = false;
+    this.hyper = false;
   }
 }

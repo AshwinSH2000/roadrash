@@ -41,6 +41,7 @@ const entries = {
   pickup: "pickup-probe.ts",
   ridepose: "rider-pose-probe.ts",
   ridesteer: "rider-steer-probe.ts",
+  stunt: "stunt-sim.ts",
 };
 const entry = entries[which];
 if (!entry) {

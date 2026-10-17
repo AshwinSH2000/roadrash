@@ -185,6 +185,7 @@ function buildForestFarmMountainAndCity(
   const last = track.samplePoints.length - 1;
 
   for (let i = 0; i < track.samplePoints.length; i += SAMPLE_STRIDE) {
+    if (track.segmentInFeature(i, "loop", true)) continue;
     const center = track.samplePoints[i];
     const right = track.sampleRights[i];
     const next = track.samplePoints[Math.min(i + 1, last)];
@@ -337,6 +338,7 @@ function buildBackgroundProps(
   const up = new THREE.Vector3(0, 1, 0);
 
   for (let i = 0; i < track.samplePoints.length; i += BACKGROUND_STRIDE) {
+    if (track.segmentInFeature(i, "loop", true)) continue;
     const center = track.samplePoints[i];
     const right = track.sampleRights[i];
     const biome = track.biomeAt(track.sampleDistances[i]);

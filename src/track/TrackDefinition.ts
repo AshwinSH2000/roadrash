@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { WORLD_UP, rightOf } from "../utils/Directions";
 import type { SceneryBiome, TrackLayout } from "./TrackLayout";
 import { DEFAULT_TRACK } from "./tracks";
+import { LoopGeometry, type TrackFeature, type TrackFeatureKind } from "./TrackFeatures";
 
 /** A resolved scenery zone, in absolute track distance rather than the layout's authored fractions. */
 export interface SceneryZone {
@@ -77,6 +78,9 @@ const FINISH_RUNOUT = 50;
  */
 const START_LEAD_IN = 25;
 
+/** How far back from a stunt feature a rescued rider is put, so they can get up to speed. */
+const RUN_UP_DISTANCE = 75;
+
 export interface TrackProjection {
   /** Distance along the centerline from the start, in metres. */
   distanceAlong: number;
@@ -111,6 +115,8 @@ export class TrackDefinition {
   readonly sceneryZones: SceneryZone[] = [];
   /** False only for a course built with no cornering by design (a drag strip) — see `TrackLayout`. */
   readonly requiresCornering: boolean;
+  /** Sand pits, river gaps and loops, resolved to sample indices — see `TrackFeatures.ts`. */
+  readonly features: TrackFeature[] = [];
 
   private readonly tmpToPos = new THREE.Vector3();
   private readonly tmpSeg = new THREE.Vector3();
@@ -152,6 +158,7 @@ export class TrackDefinition {
 
     this.sampleSpacing = this.totalLength / divisions;
     this.computeCurvature();
+    this.resolveFeatures(layout);
 
     for (const zone of layout.sceneryZones ?? []) {
       this.sceneryZones.push({
@@ -160,6 +167,93 @@ export class TrackDefinition {
         endDistance: zone.endFraction * this.totalLength,
       });
     }
+  }
+
+  private nearestSampleTo(point: THREE.Vector3): number {
+    return this.nearestSampleIn(point, 0, this.samplePoints.length - 1);
+  }
+
+  private resolveFeatures(layout: TrackLayout): void {
+    for (const spec of layout.features ?? []) {
+      const startIndex = this.nearestSampleTo(layout.points[spec.startPoint]);
+      const endIndex = this.nearestSampleTo(layout.points[spec.endPoint]);
+      const isLoop = spec.kind === "loop" && spec.loop !== undefined;
+      this.features.push({
+        kind: spec.kind,
+        startIndex,
+        endIndex,
+        startDistance: this.sampleDistances[startIndex],
+        endDistance: this.sampleDistances[endIndex],
+        skipFromSegment: startIndex,
+        skipToSegment: endIndex,
+        sideSkipFromSegment: startIndex,
+        sideSkipToSegment: isLoop ? endIndex + 1 : endIndex,
+        loop: isLoop ? new LoopGeometry(spec.loop!) : undefined,
+      });
+      if (isLoop) {
+        // The shadow of a loop is a jog, not a corner. Without this the AI
+        // would plan its braking around a bend nobody rides.
+        const from = Math.max(0, startIndex - CURVATURE_STRIDE);
+        const to = Math.min(this.sampleRadii.length - 1, endIndex + CURVATURE_STRIDE);
+        for (let i = from; i <= to; i++) this.sampleRadii[i] = Infinity;
+      }
+    }
+  }
+
+  /** Features of one kind, in order along the course. */
+  featuresOfKind(kind: TrackFeatureKind): TrackFeature[] {
+    return this.features.filter((f) => f.kind === kind);
+  }
+
+  /**
+   * True when segment `seg` belongs to a feature of `kind` that leaves it out
+   * of the plain road — or, with `alongside`, out of what flanks the road.
+   */
+  segmentInFeature(seg: number, kind?: TrackFeatureKind, alongside = false): boolean {
+    for (const f of this.features) {
+      if (kind && f.kind !== kind) continue;
+      const from = alongside ? f.sideSkipFromSegment : f.skipFromSegment;
+      const to = alongside ? f.sideSkipToSegment : f.skipToSegment;
+      if (seg >= from && seg < to) return true;
+    }
+    return false;
+  }
+
+  /** The feature (any kind) whose zone contains this distance along the road, if any. */
+  featureAt(distanceAlong: number, kind?: TrackFeatureKind): TrackFeature | null {
+    for (const f of this.features) {
+      if (kind && f.kind !== kind) continue;
+      if (distanceAlong >= f.startDistance && distanceAlong <= f.endDistance) return f;
+    }
+    return null;
+  }
+
+  /**
+   * Where a rescued rider may be put back. Inside a river gap or a loop there
+   * is no ground to stand on, and a standing restart there could not make the
+   * jump anyway, so it moves back up the road far enough to build the speed.
+   */
+  safeRescueDistance(distanceAlong: number): number {
+    for (const f of this.features) {
+      if (f.kind === "sand") continue;
+      if (distanceAlong >= f.startDistance - 4 && distanceAlong <= f.endDistance + 4) {
+        return Math.max(0, f.startDistance - RUN_UP_DISTANCE);
+      }
+    }
+    return distanceAlong;
+  }
+
+  /**
+   * The first feature of `kind` starting within `lookahead` metres ahead of
+   * `distanceAlong`, or null. The AI uses it to keep its speed up for a jump
+   * or a loop and to aim at the entry.
+   */
+  featureAhead(kind: TrackFeatureKind, distanceAlong: number, lookahead: number): TrackFeature | null {
+    for (const f of this.features) {
+      if (f.kind !== kind) continue;
+      if (f.startDistance > distanceAlong && f.startDistance - distanceAlong <= lookahead) return f;
+    }
+    return null;
   }
 
   /**

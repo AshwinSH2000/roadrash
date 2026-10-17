@@ -1,5 +1,6 @@
-import type * as THREE from "three";
+import * as THREE from "three";
 import type { TrackDefinition } from "../track/TrackDefinition";
+import type { TrackFeature } from "../track/TrackFeatures";
 import type { Bike } from "./Bike";
 import type { RiderStateMachine } from "./RiderStateMachine";
 
@@ -52,7 +53,12 @@ export class Racer {
 
   distanceAlong = 0;
   lateralOffset = 0;
+  /** Horizontal direction of the road under this rider (unit length, X/Z) — what "forward" means for wrong-way checks. */
+  trackTangentX = 0;
+  trackTangentZ = 1;
   private projectionHint = -1;
+  /** The loop this racer is riding the inside of, if any — see `StuntSystem`. */
+  loopFeature: TrackFeature | null = null;
 
   hasFinished = false;
   /** Elapsed race time when they crossed the line, in seconds. */
@@ -85,10 +91,25 @@ export class Racer {
   }
 
   updateTrackPosition(track: TrackDefinition): void {
+    const ride = this.bike.controller.currentLoopRide;
+    if (this.loopFeature && ride) {
+      // On a loop the rider is metres above the ground shadow the spline
+      // describes, going round it; progress round the loop is the honest
+      // measure of how far along they are.
+      this.distanceAlong = THREE.MathUtils.lerp(this.loopFeature.startDistance, this.loopFeature.endDistance, ride.progress);
+      this.lateralOffset = 0;
+      this.projectionHint = track.sampleIndexAt(this.distanceAlong);
+      return;
+    }
     const projection = track.project(this.bike.worldPosition, this.projectionHint);
     this.projectionHint = projection.sampleIndex;
     this.distanceAlong = projection.distanceAlong;
     this.lateralOffset = projection.lateralOffset;
+    const flat = Math.hypot(projection.tangent.x, projection.tangent.z);
+    if (flat > 1e-6) {
+      this.trackTangentX = projection.tangent.x / flat;
+      this.trackTangentZ = projection.tangent.z / flat;
+    }
   }
 
   /**
@@ -120,6 +141,7 @@ export class Racer {
   resetProjection(): void {
     this.projectionHint = -1;
     this.stuckSeconds = 0;
+    this.loopFeature = null;
   }
 
   /** Crossed the line: record it and hand the bike over to brake to a stop on the run-out. */

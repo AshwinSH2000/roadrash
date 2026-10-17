@@ -907,6 +907,69 @@ interface PreparedModel {
 /** Name of the steering assembly node inside a prepared body, so a clone can find it again. */
 const FRONT_ASSEMBLY_NAME = "__frontAssembly";
 
+/** Name of the model's body-paint material, which covers the tank, tail and rails in one mesh. */
+const BODY_PAINT_MATERIAL = "boby";
+/** Tank triangles sit forward of this in the body-paint mesh's own frame; the tail starts well past it. */
+const TANK_PAINT_LIMIT = 0.4;
+/** How much darker than the rider's colour the tank is painted. */
+const TANK_PAINT_DARKNESS = 0.55;
+
+/**
+ * Splits the tank out of the body-paint mesh and tags its material
+ * (`userData.tankPaint`) so each bike can paint it in its rider's colour. The
+ * model merges tank, tail and rails under one material, so the split is by
+ * triangle position. Does nothing for a model without that material.
+ */
+function splitTankPaint(root: THREE.Object3D): void {
+  const targets: THREE.Mesh[] = [];
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (mesh.isMesh && !Array.isArray(mesh.material) && mesh.material.name === BODY_PAINT_MATERIAL) {
+      targets.push(mesh);
+    }
+  });
+
+  for (const mesh of targets) {
+    const flat = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
+    const position = flat.getAttribute("position");
+    const tankTriangles: number[] = [];
+    const restTriangles: number[] = [];
+    for (let t = 0; t < position.count / 3; t++) {
+      const y = (position.getY(t * 3) + position.getY(t * 3 + 1) + position.getY(t * 3 + 2)) / 3;
+      (y < TANK_PAINT_LIMIT ? tankTriangles : restTriangles).push(t);
+    }
+    if (tankTriangles.length === 0) continue;
+
+    const subset = (triangles: number[]): THREE.BufferGeometry => {
+      const out = new THREE.BufferGeometry();
+      for (const name of Object.keys(flat.attributes)) {
+        const src = flat.getAttribute(name);
+        const size = src.itemSize;
+        const data = new (src.array.constructor as new (n: number) => Float32Array)(triangles.length * 3 * size);
+        triangles.forEach((t, i) => {
+          for (let v = 0; v < 3; v++) {
+            for (let c = 0; c < size; c++) data[(i * 3 + v) * size + c] = src.array[(t * 3 + v) * size + c];
+          }
+        });
+        out.setAttribute(name, new THREE.BufferAttribute(data, size, src.normalized));
+      }
+      return out;
+    };
+
+    const tankMaterial = (mesh.material as THREE.Material).clone();
+    tankMaterial.userData.tankPaint = true;
+    const tank = new THREE.Mesh(subset(tankTriangles), tankMaterial);
+    tank.name = `${mesh.name}_tank`;
+    tank.position.copy(mesh.position);
+    tank.quaternion.copy(mesh.quaternion);
+    tank.scale.copy(mesh.scale);
+    mesh.parent?.add(tank);
+
+    if (restTriangles.length > 0) mesh.geometry = subset(restTriangles);
+    else mesh.removeFromParent();
+  }
+}
+
 /**
  * Separates the wheels — and, when it can, the steering assembly — of a model
  * that has no per-part nodes to detach.
@@ -1137,6 +1200,7 @@ export function makeGltfBikeVisualsFactory(
   source: THREE.Object3D,
   fitting: BikeFitting,
 ): { factory: BikeVisualsFactory; report: BikeFitReport } {
+  splitTankPaint(source);
   source.updateMatrixWorld(true);
 
   const prepared =
@@ -1241,6 +1305,20 @@ export function makeGltfBikeVisualsFactory(
     bodyFit.add(bodyClone);
     body.add(bodyFit);
 
+    // The fuel tank takes a darker shade of the rider's colour; the rest of
+    // the paint stays as the model has it. Geometry stays shared, the
+    // material is per bike.
+    const tankMaterials: THREE.Material[] = [];
+    const tankColor = new THREE.Color(color).multiplyScalar(TANK_PAINT_DARKNESS);
+    bodyClone.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || Array.isArray(mesh.material) || !mesh.material.userData.tankPaint) return;
+      const painted = mesh.material.clone() as THREE.MeshStandardMaterial;
+      painted.color.copy(tankColor);
+      mesh.material = painted;
+      tankMaterials.push(painted);
+    });
+
     const assemblyObject = prepared.steering ? bodyClone.getObjectByName(FRONT_ASSEMBLY_NAME) : undefined;
     const frontAssembly =
       prepared.steering && assemblyObject
@@ -1269,6 +1347,7 @@ export function makeGltfBikeVisualsFactory(
         // Geometry and materials are shared with the prepared model, so they
         // are deliberately NOT freed here — only the per-instance ident is owned.
         disposeOwned(ident);
+        tankMaterials.forEach((m) => m.dispose());
         body.removeFromParent();
         wheels.forEach((w) => w.removeFromParent());
       },

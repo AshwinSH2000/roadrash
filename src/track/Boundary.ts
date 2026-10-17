@@ -56,6 +56,8 @@ export function buildBoundaryWalls(
   const last = track.samplePoints.length - 1;
 
   for (let i = 0; i <= last; i += SAMPLE_STRIDE) {
+    // Under a loop the spline is only the ground shadow of the ribbon.
+    if (track.segmentInFeature(i, "loop", true)) continue;
     const center = track.samplePoints[i];
     const right = track.sampleRights[i];
     const tangent = track.sampleTangents[i];

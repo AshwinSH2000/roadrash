@@ -27,6 +27,7 @@ import { RiderStateMachine } from "../src/entities/RiderStateMachine";
 import { LOCAL_RIGHT, WORLD_UP } from "../src/utils/Directions";
 import { OPPONENT_PERSONALITIES, AUTOPILOT_PERSONALITY } from "../src/ai/RiderPersonality";
 import { FIXED_DT } from "../src/core/Clock";
+import { StuntSystem } from "../src/entities/StuntSystem";
 
 const GRID_COLUMNS = 2;
 const GRID_ROW_GAP = 7;
@@ -112,6 +113,13 @@ async function main(): Promise<void> {
     racers[i].driver = new OpponentAI(racers[i], track, racers, personalities[i]);
   }
 
+  const stunts = new StuntSystem(track);
+  const loopResults = new Map<string, string[]>();
+  stunts.onLoopOutcome = (racer, outcome) => {
+    loopResults.set(racer.name, [...(loopResults.get(racer.name) ?? []), outcome]);
+  };
+  const waterSeconds = new Map<Racer, number>();
+
   // Knock one rider off mid-race, so the fall/recovery cycle is exercised
   // inside a real race rather than only in isolation. They must still finish.
   const KNOCKDOWN_AT = 20;
@@ -130,6 +138,7 @@ async function main(): Promise<void> {
     for (const racer of racers) racer.bike.prePhysicsStep(FIXED_DT);
     physics.step();
     for (const racer of racers) racer.bike.postPhysicsStep();
+    stunts.update(racers);
 
     elapsed += FIXED_DT;
     const graceElapsed = elapsed > STUCK_GRACE_SECONDS;
@@ -156,9 +165,12 @@ async function main(): Promise<void> {
         topSpeed[racer.name] = Math.max(topSpeed[racer.name] ?? 0, racer.bike.forwardSpeed);
       }
       const fell = racer.bike.worldPosition.y <= voidFallY;
-      if (fell || racer.updateStuck(FIXED_DT, graceElapsed)) {
+      const wet = StuntSystem.inWater(racer) ? (waterSeconds.get(racer) ?? 0) + FIXED_DT : 0;
+      waterSeconds.set(racer, wet);
+      const drowned = wet >= 0.9;
+      if (fell || drowned || racer.updateStuck(FIXED_DT, graceElapsed)) {
         const rescueDistance = THREE.MathUtils.clamp(
-          racer.distanceAlong - 5,
+          track.safeRescueDistance(racer.distanceAlong - 5),
           track.startDistance,
           track.finishDistance,
         );
@@ -200,6 +212,9 @@ async function main(): Promise<void> {
     return b.distanceAlong - a.distanceAlong;
   });
 
+  if (track.featuresOfKind("loop").length > 0) {
+    console.log("loops            " + [...loopResults.entries()].map(([name, results]) => `${name}: ${results.join("/")}`).join("   "));
+  }
   console.log(`race length      ${track.raceLength.toFixed(0)} m`);
   console.log(`simulated        ${elapsed.toFixed(1)} s\n`);
   console.log("pos  rider      time      top speed   max off-centre   rescues");

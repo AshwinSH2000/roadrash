@@ -136,6 +136,64 @@ export function createGrassTexture(bandWidthMetres: number): THREE.CanvasTexture
 }
 
 /**
+ * Pale rippled sand — fine grain with faint wind ripples across the road.
+ * Tiles every ~2.5 m like the asphalt. `null` under Node.
+ */
+export function createSandTexture(widthMetres: number): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+
+  ctx.fillStyle = "#d8bf86";
+  ctx.fillRect(0, 0, size, size);
+
+  // Wind ripples: long, low-contrast bands.
+  for (let i = 0; i < 14; i++) {
+    const y = (i / 14) * size + Math.random() * 6;
+    ctx.fillStyle = `rgba(150,115,60,${(0.08 + Math.random() * 0.1).toFixed(2)})`;
+    ctx.fillRect(0, y, size, 3 + Math.random() * 4);
+  }
+  speckle(
+    ctx,
+    size,
+    2600,
+    () => {
+      const v = 170 + Math.floor(Math.random() * 60);
+      return `rgba(${v},${v - 28},${v - 80},${(0.2 + Math.random() * 0.3).toFixed(2)})`;
+    },
+    0.4,
+    1.2,
+  );
+  return finishTexture(canvas, widthMetres / 2.5);
+}
+
+/**
+ * Murky green-blue water with pale ripple streaks. Meant to be scrolled along
+ * its V axis by `TrackBuilder` so the river visibly flows. `null` under Node.
+ */
+export function createWaterTexture(): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+
+  ctx.fillStyle = "#2f6f86";
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 90; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const len = 14 + Math.random() * 38;
+    ctx.strokeStyle = `rgba(210,240,250,${(0.1 + Math.random() * 0.25).toFixed(2)})`;
+    ctx.lineWidth = 1 + Math.random() * 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + len, y + (Math.random() - 0.5) * 4);
+    ctx.stroke();
+  }
+  speckle(ctx, size, 500, () => "rgba(20,70,90,0.25)", 1, 4);
+  return finishTexture(canvas, 1);
+}
+
+/**
  * Rocky/earth cliff face — horizontal strata bands plus grain, tiling
  * vertically down the boundary skirt (`TrackBuilder`'s `buildCliffSkirt`).
  * `null` under Node (no `<canvas>`); see the file comment.

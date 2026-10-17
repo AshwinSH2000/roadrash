@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { LoopSpec, TrackFeatureSpec } from "./TrackFeatures";
 
 /**
  * A course is a list of spline control points. Writing eighty of them by hand
@@ -42,6 +43,8 @@ export interface TrackLayout {
    * true; every existing course relies on that default and is unaffected.
    */
   readonly requiresCornering?: boolean;
+  /** Sand pits, river gaps and loops, by control-point index — see `TrackFeatures.ts`. Omitted on every plain course. */
+  readonly features?: readonly TrackFeatureSpec[];
 }
 
 /** Metres between control points on a straight. */
@@ -67,6 +70,7 @@ export class TrackRecipe {
   private z = 0;
   /** Radians; 0 faces +Z, increasing turns toward +X, which is the rider's left (see utils/Directions). */
   private heading = 0;
+  private readonly features: TrackFeatureSpec[] = [];
 
   constructor() {
     this.emit();
@@ -121,13 +125,82 @@ export class TrackRecipe {
     return this;
   }
 
+  private lastPoint(): number {
+    return this.points.length - 1;
+  }
+
+  /** A straight of `length` metres whose surface is sand. */
+  sand(length: number): this {
+    const startPoint = this.lastPoint();
+    this.straight(length);
+    this.features.push({ kind: "sand", startPoint, endPoint: this.lastPoint() });
+    return this;
+  }
+
+  /**
+   * A river to jump: a kicker climbing `rampRise` over `rampLength`, a gap of
+   * `gap` metres with no road in it (water below), and a landing deck falling
+   * away over `landingLength`. The gap keeps climbing `gapRise` so the launch
+   * angle at the lip is the ramp's, not a flattened-out version of it.
+   */
+  river(rampLength: number, rampRise: number, gap: number, gapRise: number, landingLength: number): this {
+    this.straight(rampLength, rampRise);
+    const startPoint = this.lastPoint();
+    this.straight(gap, gapRise);
+    this.features.push({ kind: "river", startPoint, endPoint: this.lastPoint() });
+    this.straight(landingLength, -(rampRise + gapRise));
+    return this;
+  }
+
+  /**
+   * A vertical loop. The spline gets only its ground shadow, a jog from the
+   * entry to the exit; the real path is `LoopGeometry`. The ground stays at
+   * this height all the way through.
+   */
+  loop(radius: number, advance: number, shift: number, side: 1 | -1 = 1): this {
+    const startPoint = this.lastPoint();
+    const spec: LoopSpec = {
+      radius,
+      advance,
+      shift,
+      side,
+      origin: new THREE.Vector3(this.x, this.y, this.z),
+      heading: this.heading,
+    };
+    const forward = new THREE.Vector3(Math.sin(this.heading), 0, Math.cos(this.heading));
+    const across = new THREE.Vector3(-forward.z, 0, forward.x);
+    // A short stub along the heading at each end keeps the spline pointing
+    // the way the bike does as it goes on and comes off the loop; without it
+    // the diagonal between them tilts the road before the entry and after the exit.
+    const place = (along: number, lateral: number): void => {
+      this.x = spec.origin.x + forward.x * along + across.x * side * lateral;
+      this.z = spec.origin.z + forward.z * along + across.z * side * lateral;
+      this.emit();
+    };
+    const stub = 5;
+    place(stub, 0);
+    for (const t of [1 / 3, 2 / 3]) place(stub + (advance - stub) * t, shift * t);
+    place(advance, shift);
+    const endPoint = this.lastPoint();
+    place(advance + stub, shift);
+    this.features.push({ kind: "loop", startPoint, endPoint, loop: spec });
+    return this;
+  }
+
   build(
     name: string,
     description: string,
     sceneryZones?: readonly SceneryZoneSpec[],
     requiresCornering?: boolean,
   ): TrackLayout {
-    return { name, description, points: this.points.map((p) => p.clone()), sceneryZones, requiresCornering };
+    return {
+      name,
+      description,
+      points: this.points.map((p) => p.clone()),
+      sceneryZones,
+      requiresCornering,
+      features: this.features.length > 0 ? this.features.map((f) => ({ ...f })) : undefined,
+    };
   }
 
   /** Where the turtle is now — handy when tuning a recipe against the validator. */

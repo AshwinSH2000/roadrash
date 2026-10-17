@@ -355,6 +355,7 @@ export class Bike {
 
     let target = 0;
     if (
+      !this.controller.currentLoopRide &&
       this.controller.hasRider &&
       front &&
       rear &&
@@ -391,7 +392,7 @@ export class Bike {
    */
   private updateVisualLean(dtSeconds: number): void {
     const airborne = !this.controller.wheelIsGrounded(0) && !this.controller.wheelIsGrounded(1);
-    if (!this.controller.hasRider || airborne) {
+    if (!this.controller.hasRider || airborne || this.controller.currentLoopRide) {
       // A riderless bike is tumbling on its own real rotation; adding a
       // cosmetic lean on top would fight it. And a bike with both wheels off
       // the ground has no cornering force to lean against — its yaw rate is

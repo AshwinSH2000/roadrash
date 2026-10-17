@@ -82,6 +82,10 @@ export interface HudData {
   /** Seconds left before a DNF, or null while nobody has finished. */
   secondsToDnf: number | null;
   minimap: MinimapData;
+  /** True while the player is riding against the direction of the road. */
+  wrongWay: boolean;
+  /** The rider's felt g-force while on a loop, null otherwise. */
+  gForce: number | null;
 }
 
 /** A square panel — `±MINIMAP_RANGE` metres of forward/back range sets the scale for both axes, so a curve draws at its true proportions rather than being stretched to fit a non-square shape. */
@@ -104,6 +108,11 @@ export class HUD {
   /** Only shown in manual mode — see `HudData.manualTransmission`. */
   private readonly rpm: HTMLDivElement;
   private readonly status: HTMLDivElement;
+  private readonly wrongWay: HTMLDivElement;
+  private readonly gForce: HTMLDivElement;
+  private readonly gForceValue: HTMLDivElement;
+  private readonly gForceBar: HTMLDivElement;
+  private readonly gVignette: HTMLDivElement;
   private readonly nitroFill: HTMLDivElement;
   private readonly nitroLabel: HTMLDivElement;
   private readonly debug: HTMLPreElement;
@@ -147,6 +156,33 @@ export class HUD {
     const flag = el("div", "position:absolute;right:-2px;top:-9px;width:4px;height:16px;background:#fff");
     bar.append(this.progressFill, this.progressMarker, flag);
     top.append(this.course, bar);
+
+    // --- upper-centre: wrong-way warning ----------------------------------
+    this.wrongWay = this.add(
+      el(
+        "div",
+        `position:fixed;left:50%;top:26%;transform:translate(-50%,-50%);display:none;flex-direction:column;align-items:center;gap:6px;pointer-events:none;z-index:11;color:#ff2d2d;text-shadow:0 3px 14px rgba(0,0,0,0.85)`,
+      ),
+    );
+    const cross = el("div", `font:900 ${mobile ? 64 : 96}px/1 ${DISPLAY}`, "\u2716");
+    const wrongText = el("div", `font:900 ${mobile ? 24 : 40}px/1 ${DISPLAY};letter-spacing:0.12em`, "WRONG DIRECTION");
+    this.wrongWay.append(cross, wrongText);
+
+    // --- g-force, only on a loop ----------------------------------------------
+    this.gVignette = this.add(
+      el("div", "position:fixed;inset:0;pointer-events:none;z-index:9;opacity:0;background:radial-gradient(ellipse at center, rgba(0,0,0,0) 35%, rgba(0,0,0,0.92) 100%)"),
+    );
+    this.gForce = this.add(
+      el(
+        "div",
+        `position:fixed;left:50%;top:${mobile ? 54 : 74}px;transform:translateX(-50%);display:none;flex-direction:column;align-items:center;gap:4px;pointer-events:none;z-index:11;color:#fff;text-shadow:0 3px 14px rgba(0,0,0,0.85)`,
+      ),
+    );
+    this.gForceValue = el("div", `font:900 ${mobile ? 30 : 44}px/1 ${DISPLAY};letter-spacing:0.04em`);
+    const gTrack = el("div", `width:${mobile ? 120 : 180}px;height:8px;background:${PANEL_BG};border:1px solid rgba(255,255,255,0.5);border-radius:4px;overflow:hidden`);
+    this.gForceBar = el("div", "height:100%;width:0%;background:#3ddc84");
+    gTrack.appendChild(this.gForceBar);
+    this.gForce.append(el("div", `font:600 11px/1 ${MONO};letter-spacing:0.25em;opacity:0.8`, "G-FORCE"), this.gForceValue, gTrack);
 
     // --- bottom-centre: speed, gear, status ------------------------------
     const bottom = this.add(
@@ -224,6 +260,21 @@ export class HUD {
     const pct = Math.max(0, Math.min(1, d.progress)) * 100;
     this.progressFill.style.width = `${pct.toFixed(1)}%`;
     this.progressMarker.style.left = `${pct.toFixed(1)}%`;
+
+    this.wrongWay.style.display = d.wrongWay ? "flex" : "none";
+
+    if (d.gForce === null) {
+      this.gForce.style.display = "none";
+      this.gVignette.style.opacity = "0";
+    } else {
+      this.gForce.style.display = "flex";
+      this.gForceValue.textContent = `${d.gForce.toFixed(1)} g`;
+      const level = Math.max(0, Math.min(1, (d.gForce - 1) / 11));
+      this.gForceBar.style.width = `${(level * 100).toFixed(0)}%`;
+      this.gForceBar.style.background = d.gForce >= 8 ? "#ff3b30" : d.gForce >= 5 ? "#ff9f1c" : "#3ddc84";
+      // The world closes in under load: nothing at 3 g, nearly tunnel vision by 10.
+      this.gVignette.style.opacity = Math.max(0, Math.min(1, (d.gForce - 3) / 7)).toFixed(2);
+    }
 
     this.speed.textContent = d.speedKph.toFixed(0);
     this.gear.textContent = `G${d.gear}`;

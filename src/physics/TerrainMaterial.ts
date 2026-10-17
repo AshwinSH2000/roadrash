@@ -32,6 +32,27 @@ export const OFFROAD_SURFACE: SurfaceProperties = {
 };
 
 /**
+ * Loose sand: the tyre can hardly bite, so a bike that tries to turn on it
+ * slides wide instead of turning, but one going straight through only loses
+ * a little speed. Grip is below what the steering asks for at any racing
+ * speed (the cap is ~16 m/s^2; 0.8 of a g-ish limit is far under that) and
+ * drag is a bit under the grass's, because the pit is short and meant to be
+ * a nuisance, not a wall.
+ */
+export const SAND_SURFACE: SurfaceProperties = {
+  name: "sand",
+  frictionSlip: 0.45,
+  rollingResistance: 34,
+};
+
+/** The river bed. Nobody is meant to ride here; it stops a bike that missed the jump so it can be rescued. */
+export const WATER_SURFACE: SurfaceProperties = {
+  name: "water",
+  frictionSlip: 1.0,
+  rollingResistance: 500,
+};
+
+/**
  * Anything a wheel lands on that wasn't explicitly registered — treated as
  * road so that an unregistered collider can never silently make a rider
  * undriveable.

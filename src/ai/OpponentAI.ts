@@ -28,6 +28,18 @@ const LINE_MARGIN = 1.6;
 const THROTTLE_GAIN = 0.5;
 
 /**
+ * Speed a bot holds on the approach to a loop or a river jump, m/s (~122
+ * km/h). The loop holds the road above about 106 km/h and the jump wants
+ * about 95; a bot that has braked for a rival or a corner must not arrive
+ * short of either. Capped by its own top speed.
+ */
+const STUNT_APPROACH_SPEED = 34;
+/** How far before a stunt the bot starts holding that speed, metres. */
+const STUNT_APPROACH_DISTANCE = 220;
+/** How far before a loop the bot lines up on the centre of the road, metres. */
+const LOOP_ALIGN_DISTANCE = 80;
+
+/**
  * Opponent rider: follows the racing line, brakes for corners, and moves over
  * for other riders. Given a `CombatBehavior` it also, now and then, bends that
  * line toward a rival to throw a punch — see `CombatBehavior` for the rules.
@@ -59,7 +71,8 @@ export class OpponentAI implements Driver {
   tick(dtSeconds: number): void {
     const intent = this.combat?.tick(dtSeconds) ?? null;
     const desiredLateral = this.chooseLine(intent);
-    const steerInput = this.steerTowardLine(desiredLateral);
+    // The bike's heading means nothing upside down; a bot just keeps its lane on a loop.
+    const steerInput = this.self.loopFeature ? 0 : this.steerTowardLine(desiredLateral);
     const throttleInput = this.chooseThrottle(dtSeconds, intent);
     this.self.bike.setInput(throttleInput, steerInput);
   }
@@ -73,6 +86,8 @@ export class OpponentAI implements Driver {
     const target = intent?.target ?? null;
     const bias =
       this.personality.dodges === false ? 0 : computeAvoidanceBias(this.self, this.field, target);
+    // The entry to a loop is the middle of the road.
+    if (this.track.featureAhead("loop", this.self.distanceAlong, LOOP_ALIGN_DISTANCE)) return 0;
     const preferred = target ? intent!.desiredLateral : this.personality.linePreference;
     const limit = ROAD_HALF_WIDTH - LINE_MARGIN;
     return THREE.MathUtils.clamp(preferred + bias, -limit, limit);
@@ -111,10 +126,14 @@ export class OpponentAI implements Driver {
     const speed = Math.abs(bike.forwardSpeed);
     const lookahead = LOOKAHEAD_BASE + LOOKAHEAD_SECONDS * speed;
 
-    const targetDistance = Math.min(
+    let targetDistance = Math.min(
       this.self.distanceAlong + lookahead,
       this.track.totalLength,
     );
+    // Aim at the foot of a loop, not at the ground-level shadow the spline
+    // draws past it, which would pull the bot off to the side on the way in.
+    const loop = this.track.featureAhead("loop", this.self.distanceAlong, lookahead);
+    if (loop) targetDistance = Math.min(targetDistance, loop.startDistance);
     const target = this.track.spawnPoint(targetDistance, desiredLateral, 0);
 
     this.tmpForward.copy(LOCAL_FORWARD).applyQuaternion(bike.worldQuaternion);
@@ -174,11 +193,14 @@ export class OpponentAI implements Driver {
         PLANNED_BRAKE_DECEL,
         CORNER_SCAN_DISTANCE,
       );
-      this.heldTargetSpeed = Math.min(
-        cfg.topSpeedEstimate * this.personality.topSpeedFraction,
-        cornerLimit,
-        intent?.target ? intent.desiredSpeed : Infinity,
-      );
+      const topSpeed = cfg.topSpeedEstimate * this.personality.topSpeedFraction;
+      this.heldTargetSpeed = Math.min(topSpeed, cornerLimit, intent?.target ? intent.desiredSpeed : Infinity);
+      const stuntAhead =
+        this.track.featureAhead("loop", this.self.distanceAlong, STUNT_APPROACH_DISTANCE) ??
+        this.track.featureAhead("river", this.self.distanceAlong, STUNT_APPROACH_DISTANCE);
+      if (stuntAhead) {
+        this.heldTargetSpeed = Math.max(this.heldTargetSpeed, Math.min(topSpeed, STUNT_APPROACH_SPEED));
+      }
       this.decisionTimer = this.personality.reactionTime;
     }
 

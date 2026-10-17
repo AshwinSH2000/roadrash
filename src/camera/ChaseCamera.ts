@@ -2,7 +2,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { Bike } from "../entities/Bike";
 import type { PhysicsWorld } from "../physics/PhysicsWorld";
-import { LOCAL_BACK, LOCAL_FORWARD, WORLD_UP } from "../utils/Directions";
+import { LOCAL_BACK, LOCAL_FORWARD, LOCAL_UP } from "../utils/Directions";
 
 
 
@@ -88,6 +88,8 @@ export class ChaseCamera {
   private readonly tmpArmLook = new THREE.Vector3();
   private readonly tmpDir = new THREE.Vector3();
   private readonly tmpUp = new THREE.Vector3();
+  /** The bike's own up: straight up while riding on the ground (the physics body is yaw-only), the inside of the loop on a loop. */
+  private readonly tmpBikeUp = new THREE.Vector3();
   private readonly tmpDesiredTarget = new THREE.Vector3();
   private readonly tmpFocus = new THREE.Vector3();
 
@@ -135,6 +137,10 @@ export class ChaseCamera {
     // Built from the physics (yaw-only) orientation on purpose: hanging the
     // camera off the leaned/pitched visual transform would swing the whole
     // world every time the bike tips into a corner.
+    // Only a loop turns the camera's world over with the bike; a riderless
+    // bike tumbling on the road must not take the camera underground with it.
+    if (bike.controller.currentLoopRide) this.tmpBikeUp.copy(LOCAL_UP).applyQuaternion(bike.worldQuaternion).normalize();
+    else this.tmpBikeUp.set(0, 1, 0);
     this.tmpBack.copy(LOCAL_BACK).applyQuaternion(bike.worldQuaternion).normalize();
     this.tmpForward.copy(LOCAL_FORWARD).applyQuaternion(bike.worldQuaternion).normalize();
     // Reversed: the rig sits on the bike's *front* side and looks back over
@@ -146,11 +152,11 @@ export class ChaseCamera {
     const distance = cfg.followDistance + cfg.extraDistanceAtSpeed * speedRatio;
     const height = cfg.followHeight + cfg.extraHeightAtSpeed * speedRatio;
 
-    this.tmpAnchor.copy(bikePosition).addScaledVector(WORLD_UP, cfg.lookHeight);
+    this.tmpAnchor.copy(bikePosition).addScaledVector(this.tmpBikeUp, cfg.lookHeight);
     this.tmpDesired
       .copy(bikePosition)
       .addScaledVector(this.tmpArmBack, distance)
-      .addScaledVector(WORLD_UP, height);
+      .addScaledVector(this.tmpBikeUp, height);
 
     this.tmpFocus.copy(focus);
     this.pullInIfBlocked(bike, distance, height);
@@ -173,7 +179,7 @@ export class ChaseCamera {
     // Roll via the up vector rather than by rotating after lookAt, so lookAt
     // itself resolves the orientation and there's no order-of-operations trap.
     this.tmpUp
-      .copy(WORLD_UP)
+      .copy(this.tmpBikeUp)
       .applyAxisAngle(this.tmpForward, bike.leanAngle * cfg.rollFraction)
       .normalize();
     this.camera.up.copy(this.tmpUp);
@@ -224,7 +230,7 @@ export class ChaseCamera {
     this.tmpDesired
       .copy(this.tmpFocus)
       .addScaledVector(this.tmpArmBack, distance * scale)
-      .addScaledVector(WORLD_UP, cfg.lookHeight + (height - cfg.lookHeight) * scale);
+      .addScaledVector(this.tmpBikeUp, cfg.lookHeight + (height - cfg.lookHeight) * scale);
   }
 }
 

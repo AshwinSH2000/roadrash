@@ -1,10 +1,17 @@
 import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { PhysicsWorld } from "../physics/PhysicsWorld";
-import { OFFROAD_SURFACE, ROAD_SURFACE, SurfaceRegistry } from "../physics/TerrainMaterial";
+import { OFFROAD_SURFACE, ROAD_SURFACE, SAND_SURFACE, SurfaceRegistry, WATER_SURFACE } from "../physics/TerrainMaterial";
 import { OFFROAD_HALF_WIDTH, ROAD_HALF_WIDTH, TrackDefinition } from "./TrackDefinition";
 import { GROUPS_FINISH_SENSOR, GROUPS_TERRAIN } from "../physics/CollisionGroups";
-import { createAsphaltTexture, createCliffTexture, createGrassTexture } from "../render/Textures";
+import {
+  createAsphaltTexture,
+  createCliffTexture,
+  createGrassTexture,
+  createSandTexture,
+  createWaterTexture,
+} from "../render/Textures";
+import { LoopGeometry, type TrackFeature } from "./TrackFeatures";
 import { buildBoundaryWalls } from "./Boundary";
 
 /**
@@ -22,6 +29,7 @@ import { buildBoundaryWalls } from "./Boundary";
 const ROAD_FALLBACK_COLOR = 0x3c3f44;
 const OFFROAD_FALLBACK_COLOR = 0x4a7c3f;
 const MARKING_COLOR = 0xf0f0e8;
+const SAND_FALLBACK_COLOR = 0xd8bf86;
 
 /** Lane markings sit fractionally above the road to avoid z-fighting with it. */
 const MARKING_LIFT = 0.02;
@@ -48,6 +56,8 @@ interface BandGeometry {
 }
 
 export interface BuiltTrack {
+  /** Per-frame animation of the scenery that moves (the river). `seconds` is any steadily increasing clock. */
+  animate: (seconds: number) => void;
   group: THREE.Group;
   roadCollider: RAPIER.Collider;
   offroadColliders: RAPIER.Collider[];
@@ -239,6 +249,7 @@ const CLIFF_ALONG_TILE = 6;
  * double-sided.
  */
 function buildCliffSkirt(track: TrackDefinition, groundFillY: number): THREE.Mesh {
+  // The skirt has no business under a loop: the road there is a shadow.
   const count = track.sampleCount;
   const positions: number[] = [];
   const uvs: number[] = [];
@@ -261,6 +272,7 @@ function buildCliffSkirt(track: TrackDefinition, groundFillY: number): THREE.Mes
     }
 
     for (let i = 0; i < count - 1; i++) {
+      if (track.segmentInFeature(i, "loop", true)) continue;
       const a = base + i * 2;
       const b = base + (i + 1) * 2;
       indices.push(a, b, a + 1);
@@ -317,6 +329,7 @@ export function buildTrack(
     innerLateral: -ROAD_HALF_WIDTH,
     outerLateral: ROAD_HALF_WIDTH,
     uvRepeatLength: roadTileMetres,
+    segmentFilter: (seg) => !track.segmentInFeature(seg),
   });
   const roadMesh = new THREE.Mesh(
     roadBand.geometry,
@@ -326,6 +339,24 @@ export function buildTrack(
   group.add(markAsBand(roadMesh, "road"));
   const roadCollider = addTrimeshCollider(physics, staticBody, roadBand, 1.0);
   surfaces.register(roadCollider, ROAD_SURFACE);
+
+  // --- Sand pits -----------------------------------------------------------
+  // The same road ribbon over the sand's segments, with its own surface: a
+  // separate collider is what lets a wheel report "sand" and lose its grip.
+  const sandFeatures = track.featuresOfKind("sand");
+  if (sandFeatures.length > 0) {
+    const sandBand = buildBand(track, {
+      innerLateral: -ROAD_HALF_WIDTH,
+      outerLateral: ROAD_HALF_WIDTH,
+      uvRepeatLength: roadTileMetres,
+      segmentFilter: (seg) => track.segmentInFeature(seg, "sand"),
+    });
+    const sandMesh = new THREE.Mesh(sandBand.geometry, terrainMaterial(createSandTexture(ROAD_HALF_WIDTH * 2), SAND_FALLBACK_COLOR, 1.0));
+    sandMesh.receiveShadow = true;
+    group.add(markAsBand(sandMesh, "sand"));
+    const sandCollider = addTrimeshCollider(physics, staticBody, sandBand, 0.6);
+    surfaces.register(sandCollider, SAND_SURFACE);
+  }
 
   // --- Off-road terrain, one band each side ------------------------------
   const offroadTileMetres = 2;
@@ -342,6 +373,7 @@ export function buildTrack(
       outerLateral: side * OFFROAD_HALF_WIDTH,
       outerLift: OFFROAD_OUTER_DROP,
       uvRepeatLength: offroadTileMetres,
+      segmentFilter: (seg) => !track.segmentInFeature(seg, "river", true) && !track.segmentInFeature(seg, "loop", true),
     });
     const mesh = new THREE.Mesh(band.geometry, offroadMaterial);
     mesh.receiveShadow = true;
@@ -425,6 +457,7 @@ export function buildTrack(
       outerLateral: side * (ROAD_HALF_WIDTH - 0.25),
       innerLift: MARKING_LIFT,
       outerLift: MARKING_LIFT,
+      segmentFilter: (seg) => !track.segmentInFeature(seg),
     });
     group.add(
       markAsBand(
@@ -441,7 +474,7 @@ export function buildTrack(
     outerLateral: 0.15,
     innerLift: MARKING_LIFT,
     outerLift: MARKING_LIFT,
-    segmentFilter: (seg) => seg % 5 < 2,
+    segmentFilter: (seg) => seg % 5 < 2 && !track.segmentInFeature(seg),
   });
   group.add(markAsBand(new THREE.Mesh(centreLine.geometry, markingMaterial), "centre-line"));
 
@@ -470,7 +503,266 @@ export function buildTrack(
     staticBody,
   );
 
-  return { group, roadCollider, offroadColliders, finishSensor };
+  // --- Stunt features ------------------------------------------------------
+  const animators: ((seconds: number) => void)[] = [];
+  for (const feature of track.features) {
+    if (feature.kind === "river") animators.push(buildRiver(physics, staticBody, surfaces, group, track, feature, groundFillY));
+    if (feature.kind === "loop" && feature.loop) buildLoop(physics, staticBody, surfaces, group, feature.loop);
+  }
+
+  return {
+    group,
+    roadCollider,
+    offroadColliders,
+    finishSensor,
+    animate: (seconds) => animators.forEach((animate) => animate(seconds)),
+  };
+}
+
+/** Where a sample's road, off-road edges and ground sit across the track, as lateral offsets and heights above the centre. */
+const PROFILE_LATERAL = [-OFFROAD_HALF_WIDTH, -ROAD_HALF_WIDTH, ROAD_HALF_WIDTH, OFFROAD_HALF_WIDTH];
+const PROFILE_DROP = [OFFROAD_OUTER_DROP, 0, 0, OFFROAD_OUTER_DROP];
+
+/** A vertical face under the ground profile at one sample, straight down to `bottomY` — the wall of the river's canyon. */
+function buildProfileWall(track: TrackDefinition, sampleIndex: number, bottomY: number): THREE.Mesh {
+  const center = track.samplePoints[sampleIndex];
+  const right = track.sampleRights[sampleIndex];
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  PROFILE_LATERAL.forEach((lateral, i) => {
+    const x = center.x + right.x * lateral;
+    const z = center.z + right.z * lateral;
+    const topY = center.y + PROFILE_DROP[i];
+    positions.push(x, topY, z, x, bottomY, z);
+    const u = (lateral + OFFROAD_HALF_WIDTH) / CLIFF_ALONG_TILE;
+    uvs.push(u, 0, u, Math.max(0.1, topY - bottomY) / CLIFF_VERTICAL_TILE);
+  });
+  for (let i = 0; i < PROFILE_LATERAL.length - 1; i++) {
+    const a = i * 2;
+    const b = (i + 1) * 2;
+    indices.push(a, b, a + 1, a + 1, b, b + 1);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const material = terrainMaterial(createCliffTexture(), 0x7a6a58, 1.0);
+  material.side = THREE.DoubleSide;
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = "river-wall";
+  return mesh;
+}
+
+/**
+ * The river under a gap in the road: a canyon floor, the walls where the road
+ * ends, flowing water, and a solid bed that stops a bike that fell short.
+ * Returns the water's animation.
+ */
+function buildRiver(
+  physics: PhysicsWorld,
+  body: RAPIER.RigidBody,
+  surfaces: SurfaceRegistry,
+  group: THREE.Group,
+  track: TrackDefinition,
+  feature: TrackFeature,
+  groundFillY: number,
+): (seconds: number) => void {
+  const a = track.samplePoints[feature.startIndex];
+  const b = track.samplePoints[feature.endIndex];
+  const gapLength = Math.hypot(b.x - a.x, b.z - a.z);
+  const heading = Math.atan2(b.x - a.x, b.z - a.z);
+  const centerX = (a.x + b.x) / 2;
+  const centerZ = (a.z + b.z) / 2;
+  const width = OFFROAD_HALF_WIDTH * 2;
+  const bedY = groundFillY + 0.35;
+  const waterY = bedY + 1.6;
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), heading);
+
+  group.add(buildProfileWall(track, feature.startIndex, bedY));
+  group.add(buildProfileWall(track, feature.endIndex, bedY));
+
+  // Solid bed, a little longer than the gap so a bike dropping off a lip
+  // lands on it rather than skimming past its edge.
+  const bedCollider = physics.world.createCollider(
+    RAPIER.ColliderDesc.cuboid(width / 2, 0.5, gapLength / 2 + 3)
+      .setTranslation(centerX, bedY - 0.5, centerZ)
+      .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+      .setFriction(0.5)
+      .setCollisionGroups(GROUPS_TERRAIN),
+    body,
+  );
+  surfaces.register(bedCollider, WATER_SURFACE);
+
+  const bedGeometry = new THREE.PlaneGeometry(width, gapLength + 6);
+  bedGeometry.rotateX(-Math.PI / 2);
+  const bed = new THREE.Mesh(bedGeometry, new THREE.MeshStandardMaterial({ color: 0x5b4a38, roughness: 1 }));
+  bed.position.set(centerX, bedY, centerZ);
+  bed.quaternion.copy(q);
+  group.add(bed);
+
+  const waterTexture = createWaterTexture();
+  if (waterTexture) waterTexture.repeat.set(width / 8, (gapLength + 6) / 8);
+  const waterMaterial = new THREE.MeshStandardMaterial({
+    color: waterTexture ? 0xffffff : 0x2f6f86,
+    roughness: 0.25,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.9,
+  });
+  if (waterTexture) waterMaterial.map = waterTexture;
+  const waterGeometry = new THREE.PlaneGeometry(width, gapLength + 6);
+  waterGeometry.rotateX(-Math.PI / 2);
+  const water = new THREE.Mesh(waterGeometry, waterMaterial);
+  water.position.set(centerX, waterY, centerZ);
+  water.quaternion.copy(q);
+  water.name = "river-water";
+  group.add(water);
+
+  // The river runs across the road, along the plane's own X axis.
+  return (seconds) => {
+    if (waterTexture) waterTexture.offset.x = -seconds * 0.12;
+  };
+}
+
+/** How many segments a loop ribbon is cut into around its full turn. */
+const LOOP_SEGMENTS = 120;
+
+/**
+ * A strip following the loop between two lateral offsets (`lift` along the
+ * ribbon's inward normal), with its winding facing the rider.
+ */
+function buildLoopStrip(loop: LoopGeometry, innerLateral: number, outerLateral: number, lift: number, uvRepeat: number): BandGeometry {
+  const frame = LoopGeometry.createFrame();
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  let travelled = 0;
+  for (let i = 0; i <= LOOP_SEGMENTS; i++) {
+    const t = (i / LOOP_SEGMENTS) * Math.PI * 2;
+    loop.frame(t, frame);
+    if (i > 0) travelled += (frame.speedFactor * Math.PI * 2) / LOOP_SEGMENTS;
+    for (const lateral of [innerLateral, outerLateral]) {
+      positions.push(
+        frame.position.x + loop.across.x * lateral + frame.normal.x * lift,
+        frame.position.y + loop.across.y * lateral + frame.normal.y * lift,
+        frame.position.z + loop.across.z * lateral + frame.normal.z * lift,
+      );
+    }
+    const v = travelled / uvRepeat;
+    uvs.push(0, v, 1, v);
+  }
+  for (let i = 0; i < LOOP_SEGMENTS; i++) {
+    const a = i * 2;
+    const b = (i + 1) * 2;
+    indices.push(a, b, a + 1, a + 1, b, b + 1);
+  }
+
+  // Face the rider: compare the first triangle's normal with the ribbon's.
+  const p = (index: number): THREE.Vector3 => new THREE.Vector3(positions[index * 3], positions[index * 3 + 1], positions[index * 3 + 2]);
+  const first = new THREE.Vector3()
+    .crossVectors(p(indices[1]).sub(p(indices[0])), p(indices[2]).sub(p(indices[0])));
+  loop.frame(0, frame);
+  if (first.dot(frame.normal) < 0) {
+    for (let i = 0; i < indices.length; i += 3) {
+      const swap = indices[i + 1];
+      indices[i + 1] = indices[i + 2];
+      indices[i + 2] = swap;
+    }
+  }
+
+  const positionArray = new Float32Array(positions);
+  const indexArray = new Uint32Array(indices);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positionArray, 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  geometry.setIndex(new THREE.BufferAttribute(indexArray, 1));
+  geometry.computeVertexNormals();
+  return { geometry, positions: positionArray, indices: indexArray };
+}
+
+/**
+ * The loop itself: asphalt ribbon with edge lines (and a collider, so the
+ * wheel rays see a road to draw against and a rider who comes off lands on
+ * something), support pillars, and the ground under it that the bands leave
+ * bare. The bike's motion on it is `LoopRide`, not this collider.
+ */
+function buildLoop(
+  physics: PhysicsWorld,
+  body: RAPIER.RigidBody,
+  surfaces: SurfaceRegistry,
+  group: THREE.Group,
+  loop: LoopGeometry,
+): void {
+  const road = buildLoopStrip(loop, -ROAD_HALF_WIDTH, ROAD_HALF_WIDTH, 0, 2.5);
+  const roadMaterial = terrainMaterial(createAsphaltTexture(ROAD_HALF_WIDTH * 2), ROAD_FALLBACK_COLOR, 0.95);
+  roadMaterial.side = THREE.DoubleSide;
+  const roadMesh = new THREE.Mesh(road.geometry, roadMaterial);
+  roadMesh.name = "loop-road";
+  roadMesh.receiveShadow = true;
+  roadMesh.castShadow = true;
+  group.add(roadMesh);
+  surfaces.register(addTrimeshCollider(physics, body, road, 1.0), ROAD_SURFACE);
+
+  const lineMaterial = new THREE.MeshStandardMaterial({ color: MARKING_COLOR, roughness: 0.8, side: THREE.DoubleSide });
+  for (const side of [-1, 1] as const) {
+    const edge = buildLoopStrip(loop, side * (ROAD_HALF_WIDTH - 0.55), side * (ROAD_HALF_WIDTH - 0.25), MARKING_LIFT, 2.5);
+    group.add(new THREE.Mesh(edge.geometry, lineMaterial));
+  }
+  // Outer lips, so the ribbon reads as a solid structure from the side.
+  const lipMaterial = new THREE.MeshStandardMaterial({ color: 0xd04a2f, roughness: 0.7, side: THREE.DoubleSide });
+  for (const side of [-1, 1] as const) {
+    const lip = buildLoopStrip(loop, side * ROAD_HALF_WIDTH, side * (ROAD_HALF_WIDTH + 0.5), 0.1, 2.5);
+    group.add(new THREE.Mesh(lip.geometry, lipMaterial));
+  }
+
+  // Pillars from the ground to the ribbon's edges.
+  const pillarMaterial = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.6 });
+  const frame = LoopGeometry.createFrame();
+  const groundY = loop.origin.y;
+  for (const degrees of [50, 130, 230, 310]) {
+    loop.frame(THREE.MathUtils.degToRad(degrees), frame);
+    for (const side of [-1, 1] as const) {
+      const x = frame.position.x + loop.across.x * side * (ROAD_HALF_WIDTH + 0.4);
+      const z = frame.position.z + loop.across.z * side * (ROAD_HALF_WIDTH + 0.4);
+      const topY = frame.position.y - 0.3;
+      const height = topY - groundY;
+      if (height < 0.5) continue;
+      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, height, 8), pillarMaterial);
+      pillar.position.set(x, groundY + height / 2, z);
+      pillar.castShadow = true;
+      group.add(pillar);
+    }
+  }
+
+  // Ground under the loop, between where the bands stop and start again.
+  const length = loop.advance + 12;
+  const width = loop.shift + OFFROAD_HALF_WIDTH * 2;
+  const heading = Math.atan2(loop.heading.x, loop.heading.z);
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), heading);
+  const cx = loop.origin.x + loop.heading.x * (loop.advance / 2) + loop.shiftDirection.x * (loop.shift / 2);
+  const cz = loop.origin.z + loop.heading.z * (loop.advance / 2) + loop.shiftDirection.z * (loop.shift / 2);
+  const slabTop = loop.origin.y - 0.06;
+  const slabGeometry = new THREE.PlaneGeometry(width, length);
+  slabGeometry.rotateX(-Math.PI / 2);
+  const slab = new THREE.Mesh(
+    slabGeometry,
+    terrainMaterial(createGrassTexture(width), OFFROAD_FALLBACK_COLOR, 1.0),
+  );
+  slab.position.set(cx, slabTop, cz);
+  slab.quaternion.copy(q);
+  slab.receiveShadow = true;
+  group.add(slab);
+  const slabCollider = physics.world.createCollider(
+    RAPIER.ColliderDesc.cuboid(width / 2, 0.5, length / 2)
+      .setTranslation(cx, slabTop - 0.5, cz)
+      .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+      .setFriction(0.85)
+      .setCollisionGroups(GROUPS_TERRAIN),
+    body,
+  );
+  surfaces.register(slabCollider, OFFROAD_SURFACE);
 }
 
 /** A full-width painted band across the road at a given distance along it. */

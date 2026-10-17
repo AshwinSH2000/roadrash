@@ -41,6 +41,7 @@ import {
 import { showFatalError } from "./ErrorOverlay";
 import { Telemetry } from "./Telemetry";
 import { Nitro } from "../entities/Nitro";
+import { DROWN_SECONDS, StuntSystem } from "../entities/StuntSystem";
 import { loadAssets, type LoadedAssets } from "./AssetLoader";
 import {
   createPlaceholderBikeVisuals,
@@ -135,6 +136,11 @@ export class Game {
 
   private readonly tmpKnock = new THREE.Vector3();
   private readonly tmpMinimapForward = new THREE.Vector3();
+  private wrongWayActive = false;
+  private readonly stunts: StuntSystem;
+  /** Seconds each racer's wheels have been in the river, for putting them back on the road. */
+  private readonly waterSeconds = new Map<Racer, number>();
+  private animationClock = 0;
 
   private finishedCount = 0;
   /**
@@ -187,6 +193,7 @@ export class Game {
       `[track] "${layout.name}" — ${layout.description} (quality: ${choice.quality}, transmission: ${choice.transmission})`,
     );
     this.builtTrack = buildTrack(this.physics, this.scene, this.track, this.surfaces);
+    this.stunts = new StuntSystem(this.track);
 
     const quality = QUALITY_PRESETS[choice.quality];
     this.scene.add(buildScenery(this.track, quality).group);
@@ -568,6 +575,25 @@ export class Game {
     });
   }
 
+  /**
+   * True while the player is riding against the road. Hysteresis: it turns on
+   * once the nose points clearly backwards along the road and off as soon as
+   * the bike has come round past sideways, so it doesn't flicker mid-turn.
+   */
+  private updateWrongWay(player: Racer): boolean {
+    if (!this.flow.isRacing || !player.rider.isRiding || player.hasFinished || player.loopFeature) {
+      this.wrongWayActive = false;
+      return false;
+    }
+    this.tmpMinimapForward.copy(LOCAL_FORWARD).applyQuaternion(player.bike.worldQuaternion);
+    const flat = Math.hypot(this.tmpMinimapForward.x, this.tmpMinimapForward.z);
+    if (flat < 1e-6) return this.wrongWayActive;
+    const alignment =
+      (this.tmpMinimapForward.x * player.trackTangentX + this.tmpMinimapForward.z * player.trackTangentZ) / flat;
+    this.wrongWayActive = alignment < (this.wrongWayActive ? -0.1 : -0.35);
+    return this.wrongWayActive;
+  }
+
   private updateHud(): void {
     const player = this.player;
     const controller = player.bike.controller;
@@ -605,6 +631,8 @@ export class Game {
           ? this.flow.deadline(firstFinish) - this.flow.raceElapsed
           : null,
       minimap: this.buildMinimapData(player),
+      wrongWay: this.updateWrongWay(player),
+      gForce: player.bike.controller.currentLoopRide ? player.bike.controller.currentLoopRide.gForce : null,
     });
 
     if (this.hud.debugVisible) {
@@ -658,7 +686,12 @@ export class Game {
       });
     }
 
-    this.tmpMinimapForward.copy(LOCAL_FORWARD).applyQuaternion(player.bike.worldQuaternion);
+    if (player.loopFeature?.loop) {
+      // Upside down the bike's own heading means nothing on a map; the loop runs straight along the road.
+      this.tmpMinimapForward.copy(player.loopFeature.loop.heading);
+    } else {
+      this.tmpMinimapForward.copy(LOCAL_FORWARD).applyQuaternion(player.bike.worldQuaternion);
+    }
 
     return {
       trackSamples,
@@ -924,7 +957,7 @@ export class Game {
     // Never rescue to before the start line — there's road there, but a rider
     // put too far back would have wheels hanging off the end of the ribbon.
     const rescueDistance = THREE.MathUtils.clamp(
-      racer.distanceAlong - 5,
+      this.track.safeRescueDistance(racer.distanceAlong - 5),
       this.track.startDistance,
       this.track.finishDistance,
     );
@@ -939,6 +972,17 @@ export class Game {
     console.warn(
       `[Phase 4] ${racer.name} ${reason}; recovered to ${rescueDistance.toFixed(0)}m along the track.`,
     );
+  }
+
+  /** True once a racer's wheels have sat in the river long enough to be put back on the road. */
+  private drowned(racer: Racer): boolean {
+    if (!StuntSystem.inWater(racer)) {
+      this.waterSeconds.delete(racer);
+      return false;
+    }
+    const seconds = (this.waterSeconds.get(racer) ?? 0) + FIXED_DT;
+    this.waterSeconds.set(racer, seconds);
+    return seconds >= DROWN_SECONDS;
   }
 
   /**
@@ -1026,6 +1070,7 @@ export class Game {
       for (const racer of this.racers) racer.bike.prePhysicsStep(FIXED_DT);
       this.physics.step();
       for (const racer of this.racers) racer.bike.postPhysicsStep();
+      this.stunts.update(this.racers);
       this.input.endStep();
       this.mobileInput.endStep();
 
@@ -1040,6 +1085,8 @@ export class Game {
           if (racer.hasFinished) continue;
           if (racer.bike.worldPosition.y <= this.voidFallY) {
             this.rescue(racer, "fell off the world");
+          } else if (this.drowned(racer)) {
+            this.rescue(racer, "fell in the river");
           } else if (racer.updateStuck(FIXED_DT, graceElapsed)) {
             this.rescue(racer, "was stuck");
           }
@@ -1068,6 +1115,8 @@ export class Game {
     }
     // The camera watches the rider, not the bike, once they've been thrown off.
     this.chaseCamera.update(this.player.bike, this.player.rider.cameraPosition, frameDelta);
+    this.animationClock += frameDelta;
+    this.builtTrack.animate(this.animationClock);
     focusSunOn(this.sunLight, this.player.rider.cameraPosition);
     positionSkyDome(this.skyDome, this.camera.position);
     this.syncStrikeVisuals();

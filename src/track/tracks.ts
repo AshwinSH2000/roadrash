@@ -260,7 +260,50 @@ const DRAG_RACE = new TrackRecipe()
     false,
   );
 
-export const TRACKS: readonly TrackLayout[] = [ORIGINAL, SWITCHBACK, SWEEPS, HILLCLIMB, ESSES, DRAG_RACE];
+/**
+ * The stunt course: a sand pit across the middle of a straight, a full
+ * vertical loop, and a river to jump. Each feature has a flat run before it
+ * to build the speed it asks for — the loop needs about 105 km/h to hold the
+ * road all the way round, the river about 90 km/h to clear.
+ */
+export const LOOP_RADIUS = 16;
+export const LOOP_ADVANCE = 16;
+export const LOOP_SHIFT = 22;
+
+const DAREDEVIL = new TrackRecipe()
+  .straight(240, 0)
+  .arc(130, -55, 0)
+  .straight(150, 0)
+  // The sand pit sits in the middle of a straight: it costs a little speed
+  // going straight through, and throws a bike sideways that tries to turn.
+  .sand(26)
+  .straight(150, 0)
+  .arc(70, 95, 0)
+  .straight(170, 0)
+  .arc(62, -100, 0)
+  // The long run-up to the loop.
+  .straight(300, 0)
+  .loop(LOOP_RADIUS, LOOP_ADVANCE, LOOP_SHIFT, 1)
+  .straight(190, 0)
+  .arc(64, 95, 0)
+  .straight(150, 0)
+  .arc(60, -110, 0)
+  .straight(320, 0)
+  // Kicker, 27 m of river, landing deck.
+  .river(26, 4, 27, -1.5, 40)
+  .straight(220, 0)
+  .arc(150, 45, 0)
+  .straight(200, 0)
+  .build(
+    "Daredevil Run",
+    "A sand pit, a full vertical loop and a river to jump — keep your speed up, you will need it.",
+    [
+      { biome: "farm", startFraction: 0.08, endFraction: 0.3 },
+      { biome: "mountain", startFraction: 0.55, endFraction: 0.85 },
+    ],
+  );
+
+export const TRACKS: readonly TrackLayout[] = [ORIGINAL, SWITCHBACK, SWEEPS, HILLCLIMB, ESSES, DRAG_RACE, DAREDEVIL];
 
 export const DEFAULT_TRACK = TRACKS[0];
 

@@ -265,10 +265,10 @@ const DRIFT_END_SPEED = 1.5;
 const DRIFT_STEER_THRESHOLD = 0.3;
 const DRIFT_BRAKE_THRESHOLD = -0.3;
 /** The rear tyre's grip while drifting, as a fraction of normal: low enough to step out, not so low it is ice. */
-const DRIFT_REAR_GRIP = 0.3;
+const DRIFT_REAR_GRIP = 0.36;
 /** How fast the nose is swung into the drift, rad/s, tapering to nothing as the slip angle nears `DRIFT_MAX_SLIP`. */
-const DRIFT_YAW_RATE = 2.2;
-const DRIFT_MAX_SLIP = THREE.MathUtils.degToRad(100);
+const DRIFT_YAW_RATE = 1.76;
+const DRIFT_MAX_SLIP = THREE.MathUtils.degToRad(80);
 /** How hard the drift pulls the yaw rate to its target, per second. */
 const DRIFT_YAW_GAIN = 7;
 /** Yaw torque cap while drifting, N·m. */

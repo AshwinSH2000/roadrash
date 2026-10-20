@@ -70,5 +70,7 @@ export class PlayerController implements Driver {
     const steerInput = clamp(keyboardSteer + (this.mobile?.steer ?? 0));
 
     this.bike.setInput(throttleInput, steerInput);
+    // Brake plus a direction is a drift; only the player can ask for one.
+    this.bike.controller.setDriftAllowed(true);
   }
 }

@@ -11,6 +11,7 @@
     "check:bike": "node scripts/run-sim.mjs fit",
     "sim:race": "node scripts/run-sim.mjs race",
     "sim:stunt": "node scripts/run-sim.mjs stunt",
+    "sim:drift": "node scripts/run-sim.mjs drift",
     "sim:probe": "node scripts/run-sim.mjs probe",
     "sim:brake": "node scripts/run-sim.mjs brake",
     "sim:corner": "node scripts/run-sim.mjs corner",

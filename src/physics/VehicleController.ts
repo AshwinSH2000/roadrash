@@ -257,6 +257,23 @@ const RIDERLESS_ANGULAR_DAMPING = 2.0;
 
 const WORLD_UP_AXIS = new THREE.Vector3(0, 1, 0);
 
+/** Slower than this (m/s, along the ground) and braking while steering is just braking and turning. */
+const DRIFT_MIN_SPEED = 9;
+/** A drift ends when the bike has slowed below this, m/s. */
+const DRIFT_END_SPEED = 1.5;
+/** Steering input needed to start a drift (0..1), and brake input (-1..0). */
+const DRIFT_STEER_THRESHOLD = 0.3;
+const DRIFT_BRAKE_THRESHOLD = -0.3;
+/** The rear tyre's grip while drifting, as a fraction of normal: low enough to step out, not so low it is ice. */
+const DRIFT_REAR_GRIP = 0.3;
+/** How fast the nose is swung into the drift, rad/s, tapering to nothing as the slip angle nears `DRIFT_MAX_SLIP`. */
+const DRIFT_YAW_RATE = 2.2;
+const DRIFT_MAX_SLIP = THREE.MathUtils.degToRad(100);
+/** How hard the drift pulls the yaw rate to its target, per second. */
+const DRIFT_YAW_GAIN = 7;
+/** Yaw torque cap while drifting, N·m. */
+const DRIFT_MAX_TORQUE = 3500;
+
 /** Suspension force cap while on a loop, newtons: the load there runs past 10 g on a 220 kg bike. */
 const LOOP_MAX_SUSPENSION_FORCE = 60000;
 /** Stiffer, better-damped springs on a loop, to carry a load of several g without bottoming out. */
@@ -297,6 +314,11 @@ export class VehicleController {
   /** True while the chassis is kinematic and being moved by a script (the rider lifting a fallen bike). */
   private scripted = false;
   private lastEngineForce = 0;
+  /** Set by the player's controller each step: may brake-and-steer start a drift? Bots never set it. */
+  private driftAllowed = false;
+  private drifting = false;
+  /** +1 drifting to the right, -1 to the left. */
+  private driftDirection = 0;
   private currentSteerLimit = 0;
   /** Set while the bike is riding the inside of a vertical loop — see `LoopRide`. */
   private loopRide: LoopRide | null = null;
@@ -453,6 +475,16 @@ export class VehicleController {
       this.vehicle.setWheelMaxSuspensionTravel(i, cfg.maxSuspensionTravel);
       this.vehicle.setWheelSideFrictionStiffness(i, cfg.sideFrictionStiffness);
     }
+  }
+
+  /** Lets brake-plus-steer start a drift. Call every step, before `tick`; only the player's controller does. */
+  setDriftAllowed(allowed: boolean): void {
+    this.driftAllowed = allowed;
+  }
+
+  /** True while the bike is in a drift: rear tyre sliding, nose swung toward the steer direction. */
+  get isDrifting(): boolean {
+    return this.drifting;
   }
 
   setInput(throttleInput: number, steerInput: number): void {
@@ -796,6 +828,7 @@ export class VehicleController {
       return;
     }
 
+    this.updateDrift();
     this.applySurfaceGrip();
     this.applyGradeFollowing(dt);
     if (this.riderAttached) {
@@ -803,7 +836,9 @@ export class VehicleController {
       this.applySteering(dt);
       // Contact state here is last step's — the rays are cast in
       // `updateVehicle` below — which is one step stale and good enough.
-      if (this.vehicle.wheelIsInContact(0) || this.vehicle.wheelIsInContact(1)) {
+      if (this.drifting) {
+        this.applyDriftYaw();
+      } else if (this.vehicle.wheelIsInContact(0) || this.vehicle.wheelIsInContact(1)) {
         this.applySlipRecovery();
       } else {
         this.applyAirborneYawControl();
@@ -1035,6 +1070,56 @@ export class VehicleController {
   }
 
   /**
+   * Starts and ends a drift. Brake and steer together, at speed, on the
+   * ground, by the player: the rear tyre lets go and the bike slides round
+   * toward the side being steered, shedding speed as it goes. It ends when
+   * the brake is released or the bike has all but stopped.
+   */
+  private updateDrift(): void {
+    const v = this.chassisBody.linvel();
+    const groundSpeed = Math.hypot(v.x, v.z);
+    const braking = this.throttleInput <= DRIFT_BRAKE_THRESHOLD;
+    const grounded = this.vehicle.wheelIsInContact(0) || this.vehicle.wheelIsInContact(1);
+    const possible = this.driftAllowed && this.riderAttached && grounded && braking && !this.handbrake && !this.finishBraking;
+    if (!possible) {
+      this.drifting = false;
+      return;
+    }
+    const steering = Math.abs(this.steerInput) >= DRIFT_STEER_THRESHOLD;
+    if (!this.drifting) {
+      if (steering && groundSpeed >= DRIFT_MIN_SPEED && this.forwardSpeed > 0) {
+        this.drifting = true;
+        this.driftDirection = Math.sign(this.steerInput);
+      }
+    } else if (groundSpeed < DRIFT_END_SPEED) {
+      this.drifting = false;
+    } else if (steering) {
+      // Changing the key mid-drift changes the side the bike is thrown toward.
+      this.driftDirection = Math.sign(this.steerInput);
+    }
+  }
+
+  /**
+   * Swings the nose into the drift. A right turn is a negative yaw here (see
+   * `utils/Directions`). The target rate fades as the slip angle opens up, so
+   * the bike comes round to roughly side-on and no further, then scrubs the
+   * rest of its speed off sliding. The ground slip recovery is off meanwhile —
+   * it exists to undo exactly this.
+   */
+  private applyDriftYaw(): void {
+    const slip = this.measureSlip();
+    this.currentSlipAngle = slip;
+    const room = THREE.MathUtils.clamp(1 - Math.abs(slip) / DRIFT_MAX_SLIP, 0, 1);
+    const target = -this.driftDirection * DRIFT_YAW_RATE * room;
+    const torque = THREE.MathUtils.clamp(
+      this.yawInertia * DRIFT_YAW_GAIN * (target - this.yawRate),
+      -DRIFT_MAX_TORQUE,
+      DRIFT_MAX_TORQUE,
+    );
+    this.chassisBody.addTorque({ x: 0, y: torque, z: 0 }, true);
+  }
+
+  /**
    * Yaws the bike back toward its direction of travel once it is sliding.
    *
    * A positive slip means the velocity is to the right of the nose, so the
@@ -1114,7 +1199,8 @@ export class VehicleController {
       // to fade. Last step's force is used; one step of lag is invisible.
       const load = this.vehicle.wheelSuspensionForce(i) ?? nominalLoad;
       const compensation = THREE.MathUtils.clamp(nominalLoad / Math.max(load, 1), 1, cfg.loadCompensationMax);
-      this.vehicle.setWheelFrictionSlip(i, surface.frictionSlip * cfg.gripMultiplier * compensation);
+      const driftGrip = this.drifting && i === 1 ? DRIFT_REAR_GRIP : 1;
+      this.vehicle.setWheelFrictionSlip(i, surface.frictionSlip * cfg.gripMultiplier * compensation * driftGrip);
 
       if (this.vehicle.wheelIsInContact(i)) {
         contactCount++;
@@ -1240,7 +1326,10 @@ export class VehicleController {
       const yawLimited = Math.atan((cfg.maxYawRate * cfg.wheelBase) / speed);
       maxAngle = Math.min(maxAngle, gripLimited, yawLimited);
     }
-    const targetAngle = this.steerInput * maxAngle;
+    // A drift turns the bars fully into it, whatever the grip-limited angle
+    // says: the front tyre is what swings the nose round while the rear slides.
+    if (this.drifting) maxAngle = cfg.maxSteerAngle;
+    const targetAngle = this.drifting ? this.driftDirection * maxAngle : this.steerInput * maxAngle;
 
     const speedRatio = THREE.MathUtils.clamp(speed / cfg.topSpeedEstimate, 0, 1);
     const turnInRate = THREE.MathUtils.lerp(cfg.steerSpeed, cfg.steerSpeedAtTopSpeed, speedRatio);

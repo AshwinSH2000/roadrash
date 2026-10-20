@@ -176,7 +176,9 @@ export const DEFAULT_VEHICLE_CONFIG: VehicleControllerConfig = {
   finishBrakeForce: 190,
   gripMultiplier: 1.0,
   sideFrictionStiffness: 1.0,
-  reverseTolerance: 0.6,
+  // A hair above `REVERSE_MAX_SPEED`, so walking the bike backwards is never
+  // mistaken for rolling away down a hill and braked.
+  reverseTolerance: 0.9,
   topSpeedEstimate: 40,
   // Nitro: +20 km/h on the top speed. The torque curve tapers to zero at the
   // top-speed estimate, so raising the estimate alone would only let the bike
@@ -257,6 +259,13 @@ const RIDERLESS_ANGULAR_DAMPING = 2.0;
 
 const WORLD_UP_AXIS = new THREE.Vector3(0, 1, 0);
 
+/** Walking the bike backwards: the most it will do, 3 km/h. */
+const REVERSE_MAX_SPEED = 3 / 3.6;
+/** Seconds stopped with the brake held before the rider starts walking the bike back, so braking to a halt does not roll straight into reverse. */
+const REVERSE_HOLD_TIME = 0.35;
+/** Slower than this (m/s) counts as stationary for the rider's feet and the reverse hold. */
+const STATIONARY_SPEED = 0.3;
+
 /** Slower than this (m/s, along the ground) and braking while steering is just braking and turning. */
 const DRIFT_MIN_SPEED = 9;
 /** A drift ends when the bike has slowed below this, m/s. */
@@ -317,6 +326,8 @@ export class VehicleController {
   /** Set by the player's controller each step: may brake-and-steer start a drift? Bots never set it. */
   private driftAllowed = false;
   private drifting = false;
+  /** Seconds the bike has been stopped with the brake held. */
+  private stoppedBraking = 0;
   /** +1 drifting to the right, -1 to the left. */
   private driftDirection = 0;
   private currentSteerLimit = 0;
@@ -480,6 +491,21 @@ export class VehicleController {
   /** Lets brake-plus-steer start a drift. Call every step, before `tick`; only the player's controller does. */
   setDriftAllowed(allowed: boolean): void {
     this.driftAllowed = allowed;
+  }
+
+  /**
+   * True while the rider is walking the bike backwards: brake held after the
+   * bike has stood still for a moment, or already rolling back under that
+   * brake. Max 3 km/h.
+   */
+  get reversing(): boolean {
+    if (!this.riderAttached || this.loopRide || this.throttleInput >= 0) return false;
+    return this.stoppedBraking >= REVERSE_HOLD_TIME || this.forwardSpeed < -0.1;
+  }
+
+  /** True when the rider is sitting still on a stopped bike, with no throttle: one foot goes down. */
+  get stationary(): boolean {
+    return this.riderAttached && !this.loopRide && Math.abs(this.forwardSpeed) < STATIONARY_SPEED && this.throttleInput <= 0.05 && !this.reversing;
   }
 
   /** True while the bike is in a drift: rear tyre sliding, nose swung toward the steer direction. */
@@ -828,6 +854,8 @@ export class VehicleController {
       return;
     }
 
+    this.stoppedBraking =
+      this.throttleInput < 0 && Math.abs(this.forwardSpeed) < STATIONARY_SPEED ? this.stoppedBraking + dt : 0;
     this.updateDrift();
     this.applySurfaceGrip();
     this.applyGradeFollowing(dt);
@@ -1254,15 +1282,17 @@ export class VehicleController {
     } else if (this.throttleInput === 0) {
       // Closed throttle: engine braking. Faded out below walking pace so it
       // can't fight the reverse creep or stop the bike rocking free.
-      if (Math.abs(forwardSpeed) > ENGINE_BRAKE_FADE_SPEED) {
+      if (Math.abs(forwardSpeed) > ENGINE_BRAKE_FADE_SPEED || forwardSpeed < -0.1) {
         brake = cfg.engineBrakeForce;
       }
     } else if (this.throttleInput < 0) {
-      if (forwardSpeed > 0.05) {
+      // A stopped bike reads a little over zero (about 0.06 m/s), so the
+      // brake-or-reverse line sits above that.
+      if (forwardSpeed > 0.15) {
         brake = cfg.brakeForce * -this.throttleInput;
-      } else if (forwardSpeed > -cfg.reverseTolerance) {
-        const towardToleranceRatio = THREE.MathUtils.clamp(-forwardSpeed / cfg.reverseTolerance, 0, 1);
-        engineForce = cfg.maxEngineForce * this.throttleInput * 0.4 * (1 - towardToleranceRatio);
+      } else if (forwardSpeed > -REVERSE_MAX_SPEED && this.reversing) {
+        const toLimit = THREE.MathUtils.clamp(-forwardSpeed / REVERSE_MAX_SPEED, 0, 1);
+        engineForce = cfg.maxEngineForce * this.throttleInput * 0.4 * (1 - toLimit);
       }
     }
 

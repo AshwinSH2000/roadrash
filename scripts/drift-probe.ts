@@ -66,3 +66,37 @@ console.log("a bot braking and steering must not drift:");
 console.log(await run(90, 1, false));
 console.log("too slow to drift (under 9 m/s):");
 console.log(await run(25, 1));
+
+console.log("REVERSE — stopped, hold the brake:");
+{
+  const physics = await PhysicsWorld.create();
+  const surfaces = new SurfaceRegistry();
+  const ground = physics.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+  surfaces.register(
+    physics.world.createCollider(RAPIER.ColliderDesc.cuboid(400, 1, 400).setTranslation(0, -1, 0).setFriction(1.0), ground),
+    ROAD_SURFACE,
+  );
+  const bike = new Bike(physics, surfaces, new THREE.Scene(), new THREE.Vector3(0, 1, 0));
+  const c = bike.controller;
+  const stepOnce = (thr: number) => { bike.setInput(thr, 0); bike.prePhysicsStep(FIXED_DT); physics.step(); bike.postPhysicsStep(); };
+  for (let i = 0; i < 60; i++) stepOnce(0);
+  let first = -1, peak = 0;
+  for (let i = 0; i < 60 * 6; i++) {
+    stepOnce(-1);
+    const kph = -bike.forwardSpeed * 3.6;
+    peak = Math.max(peak, kph);
+    if (first < 0 && kph > 0.5) first = i * FIXED_DT;
+  }
+  console.log(`  held S from rest: starts moving back after ${first.toFixed(2)} s, peak ${peak.toFixed(2)} km/h, moved back ${(-bike.worldPosition.z).toFixed(1) } m (z)`);
+  // stationary flag
+  for (let i = 0; i < 30; i++) stepOnce(0);
+  for (let i = 0; i < 90; i++) stepOnce(0);
+  console.log(`  released: stationary ${c.stationary}, reversing ${c.reversing}`);
+  // braking to a stop from speed must not roll straight into reverse
+  const b2 = new Bike(physics, surfaces, new THREE.Scene(), new THREE.Vector3(50, 1, -300));
+  const s2 = (thr: number) => { b2.setInput(thr, 0); b2.prePhysicsStep(FIXED_DT); physics.step(); b2.postPhysicsStep(); };
+  for (let i = 0; i < 60 * 8; i++) s2(1);
+  let minSpeed = 99, stopped = -1;
+  for (let i = 0; i < 60 * 6; i++) { s2(-1); minSpeed = Math.min(minSpeed, b2.forwardSpeed); if (stopped < 0 && b2.forwardSpeed < 0.1) stopped = i * FIXED_DT; }
+  console.log(`  braked from ${"speed"} to a stop at ${stopped.toFixed(1)} s then held S: slowest ${(minSpeed * 3.6).toFixed(2)} km/h`);
+}

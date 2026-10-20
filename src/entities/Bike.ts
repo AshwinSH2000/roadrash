@@ -21,6 +21,13 @@ const LEAN_SMOOTHING = 9;
 const MAX_LEAN = THREE.MathUtils.degToRad(48);
 /** Below this speed (m/s) the bike stands up — a stationary bike doesn't lean. */
 const LEAN_FADE_IN_SPEED = 3;
+/** How far the bike tips onto the planted leg at a standstill. */
+const STANDSTILL_LEAN = THREE.MathUtils.degToRad(7);
+/** Seconds for the rider's feet to go down or come up. */
+const STANCE_TIME = 0.3;
+/** Metres the bike travels backwards per full paddle cycle (a step with each foot), and the slowest the legs paddle at, m/s. */
+const PADDLE_STRIDE = 1.0;
+const PADDLE_MIN_SPEED = 0.5;
 
 const GRAVITY = 9.81;
 
@@ -60,6 +67,18 @@ export class Bike {
   private readonly tmpDown = new THREE.Vector3();
   private readonly tmpSteerQuat = new THREE.Quaternion();
   private riderHands: RiderModel | null = null;
+  /** The rider, for putting feet on the ground; set whether or not the bike has steering to attach hands to. */
+  private riderPose: RiderModel | null = null;
+  /** 0..1 blends: planted foot at a standstill, and reversing. */
+  private footBlend = 0;
+  private reverseBlend = 0;
+  private paddlePhase = 0;
+  /** Which foot goes down at a standstill: +1 left, -1 right. Follows the last steering, decided while moving. */
+  private footSide = 1;
+  private lastSteerSign = 1;
+  private readonly tmpGroundPoint = new THREE.Vector3();
+  private readonly tmpGroundNormal = new THREE.Vector3();
+  private readonly tmpInvQuat = new THREE.Quaternion();
   /** Grip positions in the steering assembly's own frame; set by `attachRiderHands`. */
   private gripAnchors: [THREE.Vector3, THREE.Vector3] | null = null;
   private readonly tmpGripLeft = new THREE.Vector3();
@@ -137,6 +156,7 @@ export class Bike {
   }
 
   setInput(throttleInput: number, steerInput: number): void {
+    if (Math.abs(steerInput) > 0.3) this.lastSteerSign = Math.sign(steerInput);
     this.controller.setInput(throttleInput, steerInput);
   }
 
@@ -198,6 +218,7 @@ export class Bike {
    * assembly turns. A model with no steering assembly keeps the hands fixed.
    */
   attachRiderHands(rider: RiderModel): void {
+    this.riderPose = rider;
     const assembly = this.visuals.frontAssembly?.object;
     if (!assembly) return;
     this.riderHands = rider;
@@ -421,6 +442,9 @@ export class Bike {
     // anyway, but a stationary bike being shoved around shouldn't tip.
     const fade = THREE.MathUtils.clamp(Math.abs(this.forwardSpeed) / LEAN_FADE_IN_SPEED, 0, 1);
     target *= fade;
+    // Sitting still with a foot down, the bike leans onto that leg (positive
+    // lean is to the right, the rider's left is +X).
+    target -= this.footSide * STANDSTILL_LEAN * this.footBlend;
 
     const blend = 1 - Math.exp(-LEAN_SMOOTHING * dtSeconds);
     this.visualLean = THREE.MathUtils.lerp(this.visualLean, target, blend);
@@ -481,6 +505,39 @@ export class Bike {
 
     this.updateFrontAssembly();
     this.applyLean(dtSeconds);
+    this.updateRiderStance(dtSeconds);
+  }
+
+  /**
+   * Feet on the ground when the bike is stopped (one) or being walked
+   * backwards (both, paddling, head turned to look behind). The road is
+   * described to the rider in bike frame — the line through the tyre patches
+   * and its normal — so the planted foot meets it however the bike is leaned.
+   */
+  private updateRiderStance(dtSeconds: number): void {
+    const rider = this.riderPose;
+    if (!rider) return;
+    const c = this.controller;
+    const onGround = c.wheelIsGrounded(0) || c.wheelIsGrounded(1);
+    const reverseTarget = c.reversing && onGround ? 1 : 0;
+    const footTarget = c.stationary && onGround ? 1 : 0;
+    const step = dtSeconds / STANCE_TIME;
+    this.footBlend = THREE.MathUtils.clamp(this.footBlend + Math.sign(footTarget - this.footBlend) * step, 0, 1);
+    this.reverseBlend = THREE.MathUtils.clamp(this.reverseBlend + Math.sign(reverseTarget - this.reverseBlend) * step, 0, 1);
+    if (Math.abs(footTarget - this.footBlend) < step) this.footBlend = footTarget;
+    if (Math.abs(reverseTarget - this.reverseBlend) < step) this.reverseBlend = reverseTarget;
+    // The foot is chosen while the feet are up, so it never swaps under a rider standing still.
+    if (this.footBlend < 0.02) this.footSide = this.lastSteerSign;
+
+    if (this.reverseBlend > 0) {
+      const speed = Math.max(Math.abs(c.forwardSpeed), PADDLE_MIN_SPEED);
+      this.paddlePhase = (this.paddlePhase + ((Math.PI * 2 * speed) / PADDLE_STRIDE) * dtSeconds) % (Math.PI * 2);
+    }
+
+    this.tmpInvQuat.copy(this.group.quaternion).invert();
+    this.tmpGroundPoint.subVectors(this.tmpPivot, this.group.position).applyQuaternion(this.tmpInvQuat);
+    this.tmpGroundNormal.set(0, 1, 0).applyQuaternion(this.tmpInvQuat);
+    rider.setStance(this.footBlend, this.footSide, this.reverseBlend, this.paddlePhase, this.tmpGroundPoint, this.tmpGroundNormal);
   }
 
   /**

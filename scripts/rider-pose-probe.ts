@@ -1,6 +1,7 @@
 /** Headless check of the procedural rider: ride pose, then the punch and kick timelines, in the bike's frame (+Z forward, +Y up, +X left). */
 import { RiderModel } from "../src/entities/RiderModel";
 import { PUNCH, KICK } from "../src/combat/AttackDefinitions";
+import * as THREE from "three";
 
 const model = new RiderModel(0xd23030);
 const f = (v: { x: number; y: number; z: number } | undefined): string =>
@@ -55,3 +56,26 @@ for (let i = 0; i <= 4; i++) {
   const q = model.jointPositions();
   console.log(`  ${(i / 4).toFixed(2)}  head ${f(q.head)}  armL ${f(q["armL.end"])}  legL ${f(q["legL.end"])}`);
 }
+
+// Feet on the ground. Bike frame, the road 0.96 m below the bike's origin.
+const ground = new THREE.Vector3(0, -0.96, 0);
+const up = new THREE.Vector3(0, 1, 0);
+const leanRight = new THREE.Vector3(Math.sin(0.12), Math.cos(0.12), 0);
+console.log("\nstationary, left foot down (leg ends should be: left near y -0.88, right on the peg), then leaned onto it");
+model.setStance(1, 1, 0, 0, ground, up);
+let p = model.jointPositions();
+console.log(`  level   legL foot ${f(p["legL.end"])}  legR foot ${f(p["legR.end"])}`);
+model.setStance(1, 1, 0, 0, ground, new THREE.Vector3(-Math.sin(0.12), Math.cos(0.12), 0));
+p = model.jointPositions();
+console.log(`  leaned  legL foot ${f(p["legL.end"])}  legR foot ${f(p["legR.end"])}  (left lean: ground drops toward +X? foot stays on it)`);
+model.setStance(1, -1, 0, 0, ground, leanRight);
+p = model.jointPositions();
+console.log(`  right foot, right lean  legL foot ${f(p["legL.end"])}  legR foot ${f(p["legR.end"])}`);
+
+console.log("\nreversing (full), one paddle cycle: both feet; the planted foot slides forward, the swinging one lifts back");
+for (let i = 0; i <= 8; i++) {
+  model.setStance(0, 1, 1, (i / 8) * Math.PI * 2, ground, up);
+  p = model.jointPositions();
+  console.log(`  ${(i / 8).toFixed(2)}  hips ${f(p.hips)}  head ${f(p.head)}  legL foot ${f(p["legL.end"])}  legR foot ${f(p["legR.end"])}`);
+}
+model.setStance(0, 1, 0, 0, ground, up);

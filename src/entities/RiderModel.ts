@@ -41,6 +41,19 @@ export const STANDING_HIP_HEIGHT = 0.84;
 /** Shift from a bike-frame point to the on-foot frame once the hips are seated: hips at the standing height. */
 export const SEAT_TO_RUNNER = new THREE.Vector3(0, STANDING_HIP_HEIGHT - HIP.y, -HIP.z);
 
+/** A planted foot, bike frame: how far out from the centreline, and how far forward of the hip's own z. */
+const FOOT_OUT = 0.34;
+const FOOT_FORWARD = 0.0;
+/** Walking the bike back: the foot's path along the ground, bike frame z, and how high it lifts on the swing. */
+const PADDLE_FRONT = 0.0;
+const PADDLE_BACK = -0.5;
+const PADDLE_LIFT = 0.14;
+/** Head turned over the shoulder to look behind while reversing, radians. */
+const REVERSE_HEAD_TURN = 0.85;
+const REVERSE_TORSO_TWIST = 0.3;
+/** Torso shift toward the planted foot at a standstill. */
+const IDLE_SWAY = 0.5;
+
 const UP = new THREE.Vector3(0, 1, 0);
 const ROLL = new THREE.Quaternion();
 const BOX = new THREE.BoxGeometry(1, 1, 1);
@@ -270,6 +283,19 @@ export class RiderModel {
   private sway = 0;
   private batonShown = false;
 
+  // Feet on the ground: a stopped bike has one foot down, a reversing one has both paddling.
+  /** 0..1: how far the planted foot is down (stationary). */
+  private footDown = 0;
+  /** Which leg is planted when stationary: +1 rider's left (+X), -1 right. */
+  private footSide = 1;
+  /** 0..1: how far into reversing the rider is. */
+  private reverseAmount = 0;
+  /** Paddle cycle, radians; one full turn is one step with each foot. */
+  private paddlePhase = 0;
+  /** A point on the ground under the bike and its normal, in bike frame. */
+  private readonly groundPoint = new THREE.Vector3(0, -0.96, 0);
+  private readonly groundNormal = new THREE.Vector3(0, 1, 0);
+
   private readonly shoulder = new THREE.Vector3();
   private readonly hip = new THREE.Vector3();
   private readonly hipCentre = new THREE.Vector3();
@@ -341,12 +367,76 @@ export class RiderModel {
     this.update();
   }
 
+  /**
+   * Puts feet on the ground. `footDown` (0..1) plants one foot at a standstill,
+   * on `footSide` (+1 left, -1 right); `reverse` (0..1) puts both down and
+   * walks the bike backwards, `phase` being where in the paddle cycle they
+   * are. `groundPoint` and `groundNormal` describe the road in bike frame, so
+   * the feet land on it however the bike is leaned or pitched.
+   */
+  setStance(
+    footDown: number,
+    footSide: number,
+    reverse: number,
+    phase: number,
+    groundPoint: THREE.Vector3,
+    groundNormal: THREE.Vector3,
+  ): void {
+    if (
+      Math.abs(footDown - this.footDown) < 1e-4 &&
+      footSide === this.footSide &&
+      Math.abs(reverse - this.reverseAmount) < 1e-4 &&
+      (reverse < 1e-4 || Math.abs(phase - this.paddlePhase) < 1e-4) &&
+      this.groundPoint.distanceToSquared(groundPoint) < 1e-8 &&
+      this.groundNormal.distanceToSquared(groundNormal) < 1e-8
+    ) {
+      return;
+    }
+    this.footDown = footDown;
+    this.footSide = footSide;
+    this.reverseAmount = reverse;
+    this.paddlePhase = phase;
+    this.groundPoint.copy(groundPoint);
+    this.groundNormal.copy(groundNormal);
+    this.update();
+  }
+
+  /** Height of the ground in bike frame at lateral position `x`, plus a foot's own thickness. */
+  private groundHeight(x: number): number {
+    const n = this.groundNormal;
+    return this.groundPoint.y - (n.x / Math.max(n.y, 0.2)) * (x - this.groundPoint.x) + FOOT_HEIGHT;
+  }
+
+  /** Writes where the foot on `sign`'s side should be on the ground into `out`, for the current stance. */
+  private groundFoot(out: THREE.Vector3, sign: number): THREE.Vector3 {
+    const x = sign * FOOT_OUT;
+    // Paddling: half a cycle apart. A planted foot slides forward relative to
+    // the bike as the bike goes back; the swing lifts it and carries it back.
+    const cycle = ((((this.paddlePhase / (2 * Math.PI)) + (sign > 0 ? 0 : 0.5)) % 1) + 1) % 1;
+    let z = FOOT_FORWARD;
+    let lift = 0;
+    if (this.reverseAmount > 0) {
+      if (cycle < 0.5) {
+        z = lerp(PADDLE_BACK, PADDLE_FRONT, cycle / 0.5);
+      } else {
+        const v = (cycle - 0.5) / 0.5;
+        z = lerp(PADDLE_FRONT, PADDLE_BACK, smooth(v));
+        lift = PADDLE_LIFT * Math.sin(Math.PI * v);
+      }
+      z = lerp(FOOT_FORWARD, z, this.reverseAmount);
+      lift *= this.reverseAmount;
+    }
+    return out.set(x, this.groundHeight(x) + lift, z);
+  }
+
   /** Sets stand / twist / sway / baton for the current attack time. */
   private computePosture(): void {
     this.stand = 0;
     this.twist = 0;
     this.sway = 0;
     this.batonShown = false;
+    this.twist += REVERSE_TORSO_TWIST * this.reverseAmount;
+    this.sway += this.footSide * IDLE_SWAY * this.footDown * (1 - this.reverseAmount);
     if (!this.attackKind) return;
 
     const e = this.attackTime;
@@ -365,7 +455,7 @@ export class RiderModel {
       else if (e < W) twist = lerp(-0.45, 0.4, whip(seg(e, cock, W)));
       else if (e < end) twist = lerp(0.4, 0.45, seg(e, W, end));
       else twist = 0.45 * (1 - smooth(seg(e, end, end + 0.8 * R)));
-      this.twist = s * twist;
+      this.twist += s * twist;
       this.batonShown = e > 0.8 * draw && e < end + 0.45 * R;
     } else {
       this.stand = smooth(seg(e, 0, 0.55 * W)) * (1 - smooth(seg(e, end + 0.15 * R, end + 0.75 * R)));
@@ -376,8 +466,8 @@ export class RiderModel {
       else if (e < end) k = 1;
       else k = 1 - smooth(seg(e, end, end + 0.5 * R));
       // Throws the upper body away from the kick to counterbalance it.
-      this.sway = -s * k;
-      this.twist = s * 0.25 * k;
+      this.sway += -s * k;
+      this.twist += s * 0.25 * k;
     }
   }
 
@@ -460,7 +550,8 @@ export class RiderModel {
 
     // Head sits on the shoulders, tilted up from the torso so the rider looks ahead.
     this.helmet.position.copy(this.top).add(this.scratch.set(0, 0.12, 0.07));
-    this.helmet.rotation.set(lean * 0.3, twist * 0.7, 0);
+    // Looks back over the left shoulder while reversing.
+    this.helmet.rotation.set(lean * 0.3, twist * 0.7 + REVERSE_HEAD_TURN * this.reverseAmount, 0);
   }
 
   /** Where a shoulder sits on the (possibly twisted) torso; `sign` +1 left, -1 right. */
@@ -501,7 +592,12 @@ export class RiderModel {
       // Leg: hip -> peg, or thrown out in a kick.
       this.hip.copy(this.hipCentre).add(this.scratch.set(sign * HIP_HALF_WIDTH, 0, 0));
       if (striking && this.attackKind === "kick") this.kickFoot(this.target, this.pegs[index]);
-      else this.target.copy(this.pegs[index]);
+      else {
+        this.target.copy(this.pegs[index]);
+        // Feet down: the planted one at a standstill, both when reversing.
+        const down = Math.max(this.reverseAmount, sign === this.footSide ? this.footDown : 0);
+        if (down > 0) this.target.lerp(this.groundFoot(this.c, sign), smooth(clamp01(down)));
+      }
       this.pole.set(sign * 0.3, 0.2, 1);
       this.legs[index].solve(this.hip, this.target, this.pole, this.tip);
     }

@@ -1,8 +1,8 @@
 import * as THREE from "three";
 
 /**
- * A procedural, seated rider built from boxes and a sphere — no asset, no
- * skinning. Same trick the late-90s games used: rigid body parts, each one
+ * A procedural, seated rider built from tapered limbs, rounded pads and a
+ * helmet — no asset, no skinning. Same trick the late-90s games used: rigid body parts, each one
  * stretched between two joint positions, with the joints worked out in code.
  *
  * The pose is a set of joint positions in the bike's frame (+Z forward, +Y up,
@@ -58,17 +58,74 @@ const REVERSE_HANG_OUT = 0.1;
 const IDLE_SWAY = 0.5;
 
 const UP = new THREE.Vector3(0, 1, 0);
+const DOWN = new THREE.Vector3(0, -1, 0);
 const ROLL = new THREE.Quaternion();
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const HEAD = new THREE.SphereGeometry(1, 14, 10);
 
-/** One body part: a unit box stretched between two points. */
+/**
+ * Darkens a unit-height geometry from one end to the other, in vertex colours:
+ * a cheap gradient that gives clothing some form without a texture. Only the
+ * jacket and trousers materials read it.
+ */
+function shaded<T extends THREE.BufferGeometry>(geometry: T, top: number, bottom: number): T {
+  const position = geometry.getAttribute("position");
+  const colors = new Float32Array(position.count * 3);
+  for (let i = 0; i < position.count; i++) {
+    const v = THREE.MathUtils.lerp(bottom, top, THREE.MathUtils.clamp(position.getY(i) + 0.5, 0, 1));
+    colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = v;
+  }
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
+/** Limb segment: +Y is the far end, a little thinner than the root, so a sleeve or leg tapers. */
+const LIMB = shaded(new THREE.CylinderGeometry(0.42, 0.5, 1, 10, 1), 0.78, 1);
+/** Torso: wide at the shoulders, narrower at the waist, darker toward the belt. */
+const TORSO = shaded(new THREE.CylinderGeometry(0.5, 0.4, 1, 12, 1), 1, 0.72);
+/** Ball: pelvis, joints, glove. */
+const BALL = shaded(new THREE.SphereGeometry(0.5, 10, 8), 1, 1);
+/** Short band that wraps a limb or torso: cuffs, stripes, belt, collar. */
+const RING = new THREE.CylinderGeometry(0.5, 0.5, 1, 12, 1);
+
+/** Adds a band to `mesh`, in the mesh's own unit coordinates (so it follows however the part is stretched). */
+function addBand(mesh: THREE.Mesh, material: THREE.Material, y: number, height: number, widthScale: number): void {
+  const band = new THREE.Mesh(RING, material);
+  band.position.y = y;
+  band.scale.set(widthScale, height, widthScale);
+  band.frustumCulled = false;
+  mesh.add(band);
+}
+
+/** A trainer: rounded upper, toe cap and a pale sole. Built with the toe along +Z and the sole at -Y, centred under the ankle. */
+function buildShoe(m: RiderMaterials): THREE.Group {
+  const shoe = new THREE.Group();
+  const piece = (geometry: THREE.BufferGeometry, material: THREE.Material, w: number, h: number, d: number, y: number, z: number): void => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.scale.set(w, h, d);
+    mesh.position.set(0, y, z);
+    mesh.castShadow = true;
+    mesh.frustumCulled = false;
+    shoe.add(mesh);
+  };
+  piece(BALL, m.gear, 0.135, 0.105, 0.32, 0, 0);
+  piece(BALL, m.gear, 0.12, 0.09, 0.14, -0.005, 0.13);
+  piece(BOX, m.accent, 0.145, 0.028, 0.34, -0.052, 0.01);
+  return shoe;
+}
+
+/** One body part: a unit shape (limb, torso, ball) stretched between two points. */
 class Part {
   readonly mesh: THREE.Mesh;
   private readonly dir = new THREE.Vector3();
 
-  constructor(material: THREE.Material, private readonly width: number, private readonly depth: number) {
-    this.mesh = new THREE.Mesh(BOX, material);
+  constructor(
+    material: THREE.Material,
+    private readonly width: number,
+    private readonly depth: number,
+    geometry: THREE.BufferGeometry = LIMB,
+  ) {
+    this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.castShadow = true;
     this.mesh.frustumCulled = false;
   }
@@ -85,11 +142,39 @@ class Part {
   }
 }
 
-/** A two-bone limb: upper + lower segment, plus an end cap (glove / boot). */
+/** A ball that sits at a joint: a shoulder, elbow, knee or hip pad. */
+class Pad {
+  readonly mesh: THREE.Mesh;
+
+  constructor(material: THREE.Material, size: THREE.Vector3) {
+    this.mesh = new THREE.Mesh(BALL, material);
+    this.mesh.scale.copy(size);
+    this.mesh.castShadow = true;
+    this.mesh.frustumCulled = false;
+  }
+}
+
+/** What a limb wears beyond its two segments and end cap. */
+interface LimbStyle {
+  rootPad: { material: THREE.Material; size: THREE.Vector3 };
+  midPad: { material: THREE.Material; size: THREE.Vector3 };
+  /** Contrasting band at the far end of the lower segment: a glove cuff or boot top. */
+  cuff: THREE.Material;
+  endGeometry: THREE.BufferGeometry;
+  /** Legs end in a shoe; arms in a glove. */
+  shoe: boolean;
+}
+
+/** A two-bone limb: upper + lower segment, joint pads, plus an end cap (glove / boot). */
 class Limb {
   readonly upper: Part;
   readonly lower: Part;
   readonly end: Part;
+  private readonly rootPad: Pad;
+  private readonly midPad: Pad;
+  private readonly shoe: THREE.Group | null;
+  private readonly tmpQuat = new THREE.Quaternion();
+  private readonly tmpOffset = new THREE.Vector3();
   private readonly mid = new THREE.Vector3();
   private readonly aim = new THREE.Vector3();
   private readonly capA = new THREE.Vector3();
@@ -105,11 +190,17 @@ class Limb {
     private readonly lengthB: number,
     thickness: number,
     endSize: THREE.Vector3,
+    style: LimbStyle,
+    materials: RiderMaterials,
   ) {
     this.upper = new Part(clothing, thickness, thickness);
     this.lower = new Part(clothing, thickness * 0.85, thickness * 0.85);
-    this.end = new Part(endMaterial, endSize.x, endSize.z);
+    this.end = new Part(endMaterial, endSize.x, endSize.z, style.endGeometry);
     this.endLength = endSize.y;
+    this.rootPad = new Pad(style.rootPad.material, style.rootPad.size);
+    this.midPad = new Pad(style.midPad.material, style.midPad.size);
+    addBand(this.lower.mesh, style.cuff, 0.4, 0.14, 1.12);
+    this.shoe = style.shoe ? buildShoe(materials) : null;
   }
 
   private readonly endLength: number;
@@ -133,16 +224,24 @@ class Limb {
   /** Places the parts along root -> mid -> tip directly, for poses worked out by forward kinematics. */
   place(root: THREE.Vector3, mid: THREE.Vector3, tip: THREE.Vector3): void {
     this.forward.subVectors(tip, mid).normalize();
+    this.rootPad.mesh.position.copy(root);
+    this.midPad.mesh.position.copy(mid);
     this.upper.between(root, mid);
     this.lower.between(mid, tip);
     // The glove / boot is centred on the tip and follows the lower segment.
     this.capA.copy(tip).addScaledVector(this.forward, -this.endLength * 0.5);
     this.capB.copy(tip).addScaledVector(this.forward, this.endLength * 0.5);
     this.end.between(this.capA, this.capB);
+    if (this.shoe) {
+      // The foot hangs off the ankle at a right angle to the shin, so it tilts with it.
+      this.tmpQuat.setFromUnitVectors(DOWN, this.forward);
+      this.shoe.quaternion.copy(this.tmpQuat);
+      this.shoe.position.copy(tip).add(this.tmpOffset.set(0, -0.05, 0.085).applyQuaternion(this.tmpQuat));
+    }
   }
 
-  get parts(): Part[] {
-    return [this.upper, this.lower, this.end];
+  get parts(): { mesh: THREE.Object3D }[] {
+    return this.shoe ? [this.upper, this.lower, this.end, this.rootPad, this.midPad, { mesh: this.shoe }] : [this.upper, this.lower, this.end, this.rootPad, this.midPad];
   }
 }
 
@@ -154,28 +253,86 @@ interface RiderMaterials {
   helmet: THREE.Material;
   visor: THREE.Material;
   baton: THREE.Material;
+  /** Contrast trim: stripes, cuffs, helmet band. A light tint of the rider's colour. */
+  accent: THREE.Material;
   all: THREE.Material[];
 }
 
 function createMaterials(color: number): RiderMaterials {
-  const make = (c: number, roughness: number): THREE.MeshStandardMaterial =>
-    new THREE.MeshStandardMaterial({ color: c, roughness });
-  const jacket = make(new THREE.Color(color).multiplyScalar(0.8).getHex(), 0.7);
-  const pants = make(0x23262e, 0.85);
+  const make = (c: number, roughness: number, vertexColors = false): THREE.MeshStandardMaterial =>
+    new THREE.MeshStandardMaterial({ color: c, roughness, vertexColors });
+  const jacket = make(new THREE.Color(color).multiplyScalar(0.8).getHex(), 0.7, true);
+  const pants = make(0x23262e, 0.85, true);
   const gear = make(0x15161a, 0.6);
-  const helmet = make(color, 0.35);
-  const visor = make(0x0c1014, 0.1);
+  // Glossy shell, and a visor that is clearly a different surface from it.
+  const helmet = new THREE.MeshStandardMaterial({ color, roughness: 0.22, metalness: 0.15 });
+  const visor = new THREE.MeshStandardMaterial({ color: 0x0f1a26, roughness: 0.08, metalness: 0.4, side: THREE.DoubleSide });
   const baton = make(0x1b1c20, 0.4);
-  return { jacket, pants, gear, helmet, visor, baton, all: [jacket, pants, gear, helmet, visor, baton] };
+  const accent = make(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.78).getHex(), 0.5);
+  return { jacket, pants, gear, helmet, visor, baton, accent, all: [jacket, pants, gear, helmet, visor, baton, accent] };
 }
 
-/** Builds a box mesh of the given size at a position, sharing the unit box geometry. */
-function boxMesh(material: THREE.Material, w: number, h: number, d: number, y = 0, z = 0): THREE.Mesh {
-  const mesh = new THREE.Mesh(BOX, material);
-  mesh.scale.set(w, h, d);
-  mesh.position.set(0, y, z);
-  mesh.castShadow = true;
-  return mesh;
+/** Pads: shoulders in the jacket's fabric, elbows and knees in dark armour, hips in the trousers'. */
+function limbStyle(m: RiderMaterials, kind: "arm" | "leg"): LimbStyle {
+  return kind === "arm"
+    ? {
+        rootPad: { material: m.jacket, size: new THREE.Vector3(0.14, 0.135, 0.14) },
+        midPad: { material: m.gear, size: new THREE.Vector3(0.115, 0.115, 0.115) },
+        cuff: m.accent,
+        endGeometry: BALL,
+        shoe: false,
+      }
+    : {
+        rootPad: { material: m.pants, size: new THREE.Vector3(0.19, 0.18, 0.19) },
+        midPad: { material: m.gear, size: new THREE.Vector3(0.155, 0.16, 0.155) },
+        cuff: m.accent,
+        endGeometry: RING,
+        shoe: true,
+      };
+}
+
+/** Chest stripes, a belt and a collar on a torso mesh made from `TORSO`, in its unit coordinates. */
+function dressTorso(torso: THREE.Mesh, m: RiderMaterials): void {
+  // The torso narrows toward the belt, so each band is sized to the radius at its height.
+  const radiusAt = (y: number): number => 0.45 + 0.1 * y;
+  addBand(torso, m.accent, 0.16, 0.07, 2 * radiusAt(0.16) * 1.04);
+  addBand(torso, m.accent, 0.03, 0.05, 2 * radiusAt(0.03) * 1.04);
+  addBand(torso, m.gear, -0.46, 0.1, 2 * radiusAt(-0.46) * 1.05);
+  addBand(torso, m.gear, 0.5, 0.1, 0.44);
+}
+
+/** The helmet: glossy shell, wrap-around visor, chin guard, top stripe and a small rear spoiler. */
+function buildHelmet(m: RiderMaterials): THREE.Mesh {
+  const shell = new THREE.Mesh(HEAD, m.helmet);
+  shell.scale.set(0.14, 0.15, 0.16);
+  shell.castShadow = true;
+  shell.frustumCulled = false;
+
+  // Sphere slices hugging the shell, in its unit coordinates. +Z is forward.
+  const slice = (radius: number, phi0: number, phiLen: number, theta0: number, thetaLen: number, material: THREE.Material): void => {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 5, phi0, phiLen, theta0, thetaLen), material);
+    mesh.frustumCulled = false;
+    shell.add(mesh);
+  };
+  const front = Math.PI / 2;
+  slice(1.025, front - 1.0, 2.0, 1.25, 0.6, m.visor);
+  // Centre stripe: front wedge from the crown to the brow, back wedge to the nape.
+  slice(1.012, front - 0.13, 0.26, 0, 1.15, m.accent);
+  slice(1.012, front + Math.PI - 0.13, 0.26, 0, 2.3, m.accent);
+
+  const chin = new THREE.Mesh(BALL, m.helmet);
+  chin.scale.set(1.0, 0.8, 0.9);
+  chin.position.set(0, -0.62, 0.55);
+  chin.frustumCulled = false;
+  shell.add(chin);
+
+  const spoiler = new THREE.Mesh(BOX, m.gear);
+  spoiler.scale.set(0.7, 0.1, 0.4);
+  spoiler.position.set(0, 0.42, -0.88);
+  spoiler.rotation.x = -0.35;
+  spoiler.frustumCulled = false;
+  shell.add(spoiler);
+  return shell;
 }
 
 /** Just what a ragdoll bone's visual needs to know about its body. */
@@ -200,30 +357,50 @@ export class RagdollVisuals {
   create(spec: RagdollPartSpec): THREE.Object3D {
     const m = this.materials;
     const part = new THREE.Group();
+    /** A shape of the given size, `y` up the bone. `flip` turns it end for end, so a limb's thin end points away from the body. */
+    const shape = (geometry: THREE.BufferGeometry, material: THREE.Material, w: number, h: number, d: number, y = 0, flip = false): THREE.Mesh => {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.scale.set(w, h, d);
+      mesh.position.y = y;
+      if (flip) mesh.rotation.x = Math.PI;
+      mesh.castShadow = true;
+      return mesh;
+    };
     if (spec.name === "pelvis") {
-      part.add(boxMesh(m.pants, 0.34, 0.24, 0.22));
+      part.add(shape(BALL, m.pants, 0.34, 0.26, 0.23));
     } else if (spec.name === "torso") {
-      part.add(boxMesh(m.jacket, 0.38, 0.6, 0.22));
+      const torso = shape(TORSO, m.jacket, 0.38, 0.6, 0.22);
+      dressTorso(torso, m);
+      part.add(torso);
     } else if (spec.name === "head") {
-      const helmet = new THREE.Mesh(HEAD, m.helmet);
-      helmet.scale.set(0.14, 0.15, 0.16);
-      helmet.castShadow = true;
-      const visor = new THREE.Mesh(BOX, m.visor);
-      visor.scale.set(0.2, 0.07, 0.1);
-      visor.position.set(0, 0.02, 0.1);
-      helmet.add(visor);
-      part.add(helmet);
+      part.add(buildHelmet(m));
     } else if (spec.name.startsWith("upperArm")) {
-      part.add(boxMesh(m.jacket, 0.1, 0.3, 0.1));
+      // The shoulder is at the +Y end.
+      part.add(shape(LIMB, m.jacket, 0.13, 0.3, 0.13, 0, true));
+      part.add(shape(BALL, m.jacket, 0.14, 0.135, 0.14, 0.16));
     } else if (spec.name.startsWith("foreArm")) {
       // The elbow is at the +Y end, the hand at -Y.
-      part.add(boxMesh(m.jacket, 0.09, 0.26, 0.09, 0.03));
-      part.add(boxMesh(m.gear, 0.09, 0.1, 0.09, -spec.halfHeight - spec.radius + 0.05));
+      part.add(shape(LIMB, m.jacket, 0.11, 0.26, 0.11, 0.03, true));
+      part.add(shape(BALL, m.gear, 0.115, 0.115, 0.115, 0.145));
+      const cuff = new THREE.Mesh(RING, m.accent);
+      cuff.scale.set(0.12, 0.035, 0.12);
+      cuff.position.y = -0.085;
+      part.add(cuff);
+      part.add(shape(BALL, m.gear, 0.11, 0.1, 0.11, -spec.halfHeight - spec.radius + 0.05));
     } else if (spec.name.startsWith("upperLeg")) {
-      part.add(boxMesh(m.pants, 0.15, 0.4, 0.15));
+      part.add(shape(LIMB, m.pants, 0.18, 0.4, 0.18, 0, true));
     } else {
-      part.add(boxMesh(m.pants, 0.13, 0.28, 0.13, 0.05));
-      part.add(boxMesh(m.gear, 0.1, 0.2, 0.13, -spec.halfHeight - spec.radius + 0.09, 0.02));
+      // Knee at +Y, boot at -Y.
+      part.add(shape(LIMB, m.pants, 0.155, 0.28, 0.155, 0.05, true));
+      part.add(shape(BALL, m.gear, 0.155, 0.16, 0.155, 0.195));
+      const top = new THREE.Mesh(RING, m.accent);
+      top.scale.set(0.15, 0.035, 0.15);
+      top.position.y = -0.1;
+      part.add(top);
+      part.add(shape(RING, m.gear, 0.14, 0.12, 0.15, -0.13));
+      const shoe = buildShoe(m);
+      shoe.position.set(0, -spec.halfHeight - spec.radius - 0.05, 0.085);
+      part.add(shoe);
     }
     return part;
   }
@@ -265,7 +442,6 @@ export class RiderModel {
   private readonly pelvis: Part;
   private readonly baton: Part;
   private readonly helmet: THREE.Mesh;
-  private readonly visor: THREE.Mesh;
   /** Index 0 = rider's left (+X), 1 = right (-X). */
   private readonly arms: Limb[];
   private readonly legs: Limb[];
@@ -315,28 +491,24 @@ export class RiderModel {
   constructor(color: number) {
     const m = (this.materials = createMaterials(color));
     const { jacket, pants, gear } = m;
-    const helmetShell = m.helmet;
-    const visorGlass = m.visor;
     const batonMaterial = m.baton;
 
-    this.pelvis = new Part(pants, 0.32, 0.22);
-    this.torso = new Part(jacket, 0.38, 0.22);
+    this.pelvis = new Part(pants, 0.32, 0.22, BALL);
+    this.torso = new Part(jacket, 0.38, 0.22, TORSO);
+    dressTorso(this.torso.mesh, m);
     this.baton = new Part(batonMaterial, 0.05, 0.05);
     this.baton.mesh.visible = false;
     this.object.add(this.pelvis.mesh, this.torso.mesh, this.baton.mesh);
 
-    this.helmet = new THREE.Mesh(HEAD, helmetShell);
-    this.helmet.scale.set(0.14, 0.15, 0.16);
-    this.helmet.castShadow = true;
-    this.helmet.frustumCulled = false;
-    this.visor = new THREE.Mesh(BOX, visorGlass);
-    this.visor.scale.set(0.2, 0.07, 0.1);
-    this.visor.position.set(0, 0.02, 0.1);
-    this.helmet.add(this.visor);
+    this.helmet = buildHelmet(m);
     this.object.add(this.helmet);
 
-    this.arms = [0, 1].map(() => new Limb(jacket, gear, UPPER_ARM, FOREARM, 0.095, new THREE.Vector3(0.09, 0.1, 0.09)));
-    this.legs = [0, 1].map(() => new Limb(pants, gear, THIGH, SHIN, 0.14, new THREE.Vector3(0.1, 0.22, 0.1)));
+    this.arms = [0, 1].map(
+      () => new Limb(jacket, gear, UPPER_ARM, FOREARM, 0.13, new THREE.Vector3(0.11, 0.1, 0.11), limbStyle(m, "arm"), m),
+    );
+    this.legs = [0, 1].map(
+      () => new Limb(pants, gear, THIGH, SHIN, 0.18, new THREE.Vector3(0.13, 0.12, 0.13), limbStyle(m, "leg"), m),
+    );
     for (const limb of [...this.arms, ...this.legs]) for (const part of limb.parts) this.object.add(part.mesh);
 
     this.update();

@@ -1,3 +1,4 @@
+import { FIXED_DT } from "../core/Clock";
 import * as THREE from "three";
 import { GRIP, type RiderModel } from "./RiderModel";
 import type { PhysicsWorld } from "../physics/PhysicsWorld";
@@ -287,6 +288,7 @@ export class Bike {
 
   /** Call after `physics.step()`: captures the newly-integrated transform. */
   postPhysicsStep(): void {
+    this.controller.observeLoopRide(FIXED_DT);
     this.captureTransform(this.currPos, this.currQuat);
     this.captureWheels();
     if (this.snapWheelsNextStep) {

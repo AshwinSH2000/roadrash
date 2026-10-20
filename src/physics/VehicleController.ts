@@ -5,7 +5,7 @@ import type { PhysicsWorld } from "./PhysicsWorld";
 import { DEFAULT_SURFACE, SurfaceRegistry, type SurfaceProperties } from "./TerrainMaterial";
 import { GROUPS_BIKE, GROUPS_WHEEL_RAY } from "./CollisionGroups";
 import { Transmission, type TransmissionMode } from "./Transmission";
-import { LoopRide, type LoopRideStatus } from "./LoopRide";
+import { LoopRide } from "./LoopRide";
 import type { LoopGeometry } from "../track/TrackFeatures";
 
 /**
@@ -257,6 +257,17 @@ const RIDERLESS_ANGULAR_DAMPING = 2.0;
 
 const WORLD_UP_AXIS = new THREE.Vector3(0, 1, 0);
 
+/** Suspension force cap while on a loop, newtons: the load there runs past 10 g on a 220 kg bike. */
+const LOOP_MAX_SUSPENSION_FORCE = 60000;
+/** Stiffer, better-damped springs on a loop, to carry a load of several g without bottoming out. */
+const LOOP_SUSPENSION_STIFFNESS = 100;
+const LOOP_SUSPENSION_DAMPING = 20;
+/** Share of the loop's centripetal push applied straight to the chassis; the suspension carries the rest. */
+const LOOP_RAIL_SHARE = 0.8;
+/** Balancing torque on a loop: stiffness (1/s^2) and damping (1/s) per unit of inertia. */
+const LOOP_BALANCE_STIFFNESS = 150;
+const LOOP_BALANCE_DAMPING = 22;
+
 export class VehicleController {
   readonly chassisBody: RAPIER.RigidBody;
   readonly chassisCollider: RAPIER.Collider;
@@ -285,7 +296,10 @@ export class VehicleController {
   private readonly tmpLoopPos = new THREE.Vector3();
   private readonly tmpLoopQuat = new THREE.Quaternion();
   private readonly tmpLoopVel = new THREE.Vector3();
-  private loopWheelSpin = 0;
+  private readonly tmpLoopAngvel = new THREE.Vector3();
+  private readonly tmpLoopTorque = new THREE.Vector3();
+  private readonly tmpLoopQuat2 = new THREE.Quaternion();
+  private readonly tmpLoopVec = new THREE.Vector3();
 
   /**
    * Gear/rpm simulation. Automatic mode (every bot, and the player by
@@ -611,9 +625,6 @@ export class VehicleController {
   }
 
   wheelRotation(index: 0 | 1): number {
-    // The chassis is moved by a script on a loop, so the vehicle's own idea
-    // of how far the wheels have turned is not worth drawing.
-    if (this.loopRide) return this.loopWheelSpin;
     return this.vehicle.wheelRotation(index) ?? 0;
   }
 
@@ -623,16 +634,24 @@ export class VehicleController {
   }
 
   /**
-   * Puts the bike on a loop at the given speed: the chassis leaves the
-   * physics and follows the ride's pose until it finishes or comes off. See
-   * `LoopRide` for why this is done by a script.
+   * Puts the bike on a loop at the given speed. The chassis stays an ordinary
+   * dynamic body; what changes is that its pitch and roll are released (the
+   * lock is what keeps a bike upright on the flat, and a loop turns it
+   * through a full circle), the suspension is allowed to push as hard as a
+   * loop's load needs, and a balancing torque holds the attitude. See
+   * `LoopRide`.
    */
   beginLoopRide(geometry: LoopGeometry, entrySpeed: number, lateral: number): void {
     if (this.loopRide || !this.riderAttached) return;
     this.loopRide = new LoopRide(geometry, entrySpeed, lateral);
     this.loopOutcome = null;
-    this.loopWheelSpin = this.vehicle.wheelRotation(0) ?? 0;
-    this.beginScriptedMove();
+    this.chassisBody.setEnabledRotations(true, true, true, true);
+    for (let i = 0; i < 2; i++) {
+      this.vehicle.setWheelMaxSuspensionForce(i, LOOP_MAX_SUSPENSION_FORCE);
+      this.vehicle.setWheelSuspensionStiffness(i, LOOP_SUSPENSION_STIFFNESS);
+      this.vehicle.setWheelSuspensionCompression(i, LOOP_SUSPENSION_DAMPING);
+      this.vehicle.setWheelSuspensionRelaxation(i, LOOP_SUSPENSION_DAMPING);
+    }
     this.currentSteerAngle = 0;
     this.vehicle.setWheelSteering(0, 0);
   }
@@ -644,17 +663,69 @@ export class VehicleController {
     return outcome;
   }
 
+  /**
+   * One step of riding a loop, before the physics step: drive and brake as
+   * on the flat, and balance the chassis onto the attitude the ride asks for.
+   */
   private tickLoopRide(dt: number): void {
     const ride = this.loopRide;
     if (!ride) return;
-    const boost = this.boosting ? this.boostForce : 1;
-    const status: LoopRideStatus = ride.step(dt, this.throttleInput, boost, this.steerInput);
-    this.loopWheelSpin += (ride.speed * dt) / this.config.wheelRadius;
-    ride.pose(this.tmpLoopPos, this.tmpLoopQuat);
-    this.moveScripted(this.tmpLoopPos, this.tmpLoopQuat);
-    // Keeps the wheels' hard points and contacts fresh for drawing.
+    this.applySurfaceGrip();
+    this.applyDrivetrain();
+    this.currentSteerAngle = 0;
+    this.vehicle.setWheelSteering(0, 0);
+    this.applyLoopBalance(ride);
+    // The ribbon's share of the centripetal push, applied as a force: the
+    // suspension alone cannot carry 6-10 g (it bottoms out and the chassis
+    // box then ploughs into the ramp). The wheels still carry the remainder,
+    // and that load is what gives them grip to drive and brake with. Speed,
+    // height and the moment the bike comes off all still come from physics.
+    const push = ride.requiredNormalAcceleration() * LOOP_RAIL_SHARE * this.config.chassisMass;
+    const n = ride.normal;
+    this.chassisBody.addForce({ x: n.x * push, y: n.y * push, z: n.z * push }, true);
     this.vehicle.updateVehicle(dt, undefined, GROUPS_WHEEL_RAY);
-    this.transmission.update(ride.speed, dt);
+    this.transmission.update(this.forwardSpeed, dt);
+  }
+
+  /** PD torque, about each of the chassis's own axes, toward the ride's target attitude. */
+  private applyLoopBalance(ride: LoopRide): void {
+    const q = this.chassisBody.rotation();
+    this.tmpLoopQuat.set(q.x, q.y, q.z, q.w);
+    ride.targetAttitude(this.tmpLoopQuat2);
+    // Error rotation in the chassis's own frame: q^-1 * target.
+    const error = this.tmpLoopQuat.clone().invert().multiply(this.tmpLoopQuat2);
+    if (error.w < 0) error.set(-error.x, -error.y, -error.z, -error.w);
+    const angle = 2 * Math.acos(Math.min(1, error.w));
+    const sin = Math.sqrt(Math.max(0, 1 - error.w * error.w));
+    const e = this.tmpLoopVec.set(error.x, error.y, error.z);
+    if (sin > 1e-6) e.multiplyScalar(angle / sin);
+    else e.set(0, 0, 0);
+
+    const w = this.chassisBody.angvel();
+    // Spin relative to the spin the path itself demands; without that, holding
+    // the nose on a circle at speed would mean a permanent lag behind it.
+    ride.targetAngularVelocity(this.tmpLoopTorque);
+    this.tmpLoopAngvel.set(w.x - this.tmpLoopTorque.x, w.y - this.tmpLoopTorque.y, w.z - this.tmpLoopTorque.z).applyQuaternion(this.tmpLoopQuat.clone().invert());
+    const inertia = this.chassisBody.principalInertia();
+    this.tmpLoopTorque.set(
+      inertia.x * (LOOP_BALANCE_STIFFNESS * e.x - LOOP_BALANCE_DAMPING * this.tmpLoopAngvel.x),
+      inertia.y * (LOOP_BALANCE_STIFFNESS * e.y - LOOP_BALANCE_DAMPING * this.tmpLoopAngvel.y),
+      inertia.z * (LOOP_BALANCE_STIFFNESS * e.z - LOOP_BALANCE_DAMPING * this.tmpLoopAngvel.z),
+    );
+    this.tmpLoopTorque.applyQuaternion(this.tmpLoopQuat);
+    this.chassisBody.addTorque({ x: this.tmpLoopTorque.x, y: this.tmpLoopTorque.y, z: this.tmpLoopTorque.z }, true);
+  }
+
+  /** After the physics step: reads where the bike got to and ends the ride if it is over. */
+  observeLoopRide(dt: number): void {
+    const ride = this.loopRide;
+    if (!ride) return;
+    const p = this.chassisBody.translation();
+    const v = this.chassisBody.linvel();
+    this.tmpLoopPos.set(p.x, p.y, p.z);
+    this.tmpLoopVel.set(v.x, v.y, v.z);
+    const wheelsDown = (this.vehicle.wheelIsInContact(0) ? 1 : 0) + (this.vehicle.wheelIsInContact(1) ? 1 : 0);
+    const status = ride.observe(dt, this.tmpLoopPos, this.tmpLoopVel, wheelsDown, this.steerInput);
     if (status !== "riding") this.endLoopRide(status);
   }
 
@@ -663,22 +734,26 @@ export class VehicleController {
     if (!ride) return;
     this.loopRide = null;
     this.loopOutcome = status;
-    this.scripted = false;
-    ride.velocity(this.tmpLoopVel);
-    this.chassisBody.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
-    this.chassisBody.setTranslation({ x: this.tmpLoopPos.x, y: this.tmpLoopPos.y, z: this.tmpLoopPos.z }, true);
+    this.applyWheelTuning();
     if (status === "completed") {
       // Back on the ground, heading along the road, upright: pitch and roll
       // are locked again so only yaw survives.
-      const heading = Math.atan2(this.tmpLoopVel.x, this.tmpLoopVel.z);
-      this.tmpLoopQuat.setFromAxisAngle(WORLD_UP_AXIS, heading);
+      // The exit is tangent to the road, so the bike leaves along it exactly:
+      // whatever heading error the ride carried is dropped here.
+      const v = this.chassisBody.linvel();
+      const flat = Math.hypot(v.x, v.z);
+      const h = ride.geometry.heading;
+      this.chassisBody.setLinvel({ x: h.x * flat, y: v.y, z: h.z * flat }, true);
+      this.tmpLoopQuat.setFromAxisAngle(WORLD_UP_AXIS, Math.atan2(h.x, h.z));
+      this.chassisBody.setEnabledRotations(false, true, false, true);
+      this.chassisBody.setRotation(
+        { x: this.tmpLoopQuat.x, y: this.tmpLoopQuat.y, z: this.tmpLoopQuat.z, w: this.tmpLoopQuat.w },
+        true,
+      );
+      this.chassisBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
-    this.chassisBody.setRotation(
-      { x: this.tmpLoopQuat.x, y: this.tmpLoopQuat.y, z: this.tmpLoopQuat.z, w: this.tmpLoopQuat.w },
-      true,
-    );
-    this.chassisBody.setLinvel({ x: this.tmpLoopVel.x, y: this.tmpLoopVel.y, z: this.tmpLoopVel.z }, true);
-    this.chassisBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    // A failed ride keeps its rotations free and its motion: the rider goes
+    // off it the ordinary way and the bike tumbles on.
   }
 
   tick(dt: number): void {
@@ -745,7 +820,7 @@ export class VehicleController {
    * nose into the rising road, into a redirect up the slope.
    */
   private absorbLanding(): void {
-    if (this.scripted) return;
+    if (this.scripted || this.loopRide) return;
     const cfg = this.config;
     if (cfg.landingAbsorbSpeed <= 0) return;
     for (let i = 0; i < 2; i++) {
@@ -783,6 +858,10 @@ export class VehicleController {
   setRiderAttached(attached: boolean): void {
     if (this.riderAttached === attached) return;
     this.riderAttached = attached;
+    if (this.loopRide) {
+      this.loopRide = null;
+      this.applyWheelTuning();
+    }
 
     if (attached) {
       this.standUpright();
@@ -1023,7 +1102,7 @@ export class VehicleController {
 
     this.currentSurface = contactCount > 0 ? dominant : DEFAULT_SURFACE;
 
-    if (totalResistance > 0) {
+    if (totalResistance > 0 && !this.loopRide) {
       const resistance = totalResistance / 2;
       const v = this.chassisBody.linvel();
       // Horizontal only — resisting vertical motion would fight gravity and
@@ -1165,8 +1244,8 @@ export class VehicleController {
   respawnAt(position: THREE.Vector3, rotation: THREE.Quaternion): void {
     if (this.loopRide) {
       this.loopRide = null;
-      this.scripted = false;
-      this.chassisBody.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+      this.applyWheelTuning();
+      this.chassisBody.setEnabledRotations(false, true, false, true);
     }
     this.chassisBody.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
     this.chassisBody.setRotation(

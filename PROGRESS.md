@@ -554,3 +554,11 @@ Four requests in one pass, each triggered by actually playing the deployed Netli
 **Status:** Done headlessly; pending user's look in the browser
 - `LoopRide`: arriving at the ribbon edge (1 m inside the lip) at over `EDGE_FALL_SPEED` (4 m/s sideways) ends the ride as a failure; the bike keeps its along-track velocity plus the sideways speed, and the rider is knocked off through the existing loop-failure path. Already at the edge, pushing on only slides along the lip. Full steering from the centre reaches the edge at ~5.5 m/s (falls); about half steering stays under 4 m/s (safe).
 - Measured: steer +-0.5 completes, +-1 falls, and every loop fall (edge or too slow) recovers: tumble, get up, remount in 9-13 s.
+
+### Dynamic loop (branch `dynamic-loop`, experiment)
+
+- The loop is no longer a kinematic rail. The chassis stays a dynamic body with pitch and roll unlocked; the wheel rays ride the loop's trimesh; speed trades for height through real gravity, and the bike comes off when it is too slow.
+- `LoopRide` is now an observer (loop angle, lateral position, speed, g-force from the bike's real state) plus the attitude the rider would hold. `VehicleController` turns that into a PD balance torque (with the path's own angular velocity as feedforward; without it the nose lags and the bike hits the ramp) and applies 80% of the centripetal push as a force. Suspension alone bottomed out at 6-10 g; the remaining 20% plus stiffer springs (100, damping 20, 60 kN cap) keeps the wheels loaded so they can drive and brake.
+- Ends: reaches 2pi - 0.03 (completed, leaves exactly along the road heading, locks restored), off the ribbon side, stalled under 3 m/s, or no wheel down for 0.3 s while more than 2.2 m off the ribbon (failed).
+- Measured (`npm run sim:stunt`): completes from 125 km/h coasting and from 90 km/h with throttle; <=110 km/h coasting stalls on the climb; steer -1 at 130 km/h throws the bike off the edge, +-0.5 completes. Bot race: all six complete the loop. Not seen on screen.
+- Known cost: the rail share is a tuning compromise and the entry still has an instant jump in curvature (option 3 would fix that).

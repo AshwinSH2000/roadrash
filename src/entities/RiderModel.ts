@@ -945,6 +945,15 @@ export class RiderModel {
     this.object.visible = visible;
   }
 
+  /** The helmet, whose position and yaw a first-person camera follows. */
+  get head(): THREE.Object3D {
+    return this.helmet;
+  }
+
+  setHeadVisible(visible: boolean): void {
+    this.helmet.visible = visible;
+  }
+
   dispose(): void {
     this.object.removeFromParent();
     // Box and sphere geometry are shared module-wide; only materials are owned.

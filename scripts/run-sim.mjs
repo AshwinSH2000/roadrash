@@ -43,6 +43,7 @@ const entries = {
   ridesteer: "rider-steer-probe.ts",
   stunt: "stunt-sim.ts",
   drift: "drift-probe.ts",
+  camera: "camera-probe.ts",
   tone: "ragdoll-tone-probe.ts",
 };
 const entry = entries[which];

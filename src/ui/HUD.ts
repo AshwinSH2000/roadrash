@@ -109,6 +109,8 @@ export class HUD {
   private readonly rpm: HTMLDivElement;
   private readonly status: HTMLDivElement;
   private readonly wrongWay: HTMLDivElement;
+  private readonly cameraLabel: HTMLDivElement;
+  private cameraLabelTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly gForce: HTMLDivElement;
   private readonly gForceValue: HTMLDivElement;
   private readonly gForceBar: HTMLDivElement;
@@ -167,6 +169,14 @@ export class HUD {
     const cross = el("div", `font:900 ${mobile ? 64 : 96}px/1 ${DISPLAY}`, "\u2716");
     const wrongText = el("div", `font:900 ${mobile ? 24 : 40}px/1 ${DISPLAY};letter-spacing:0.12em`, "WRONG DIRECTION");
     this.wrongWay.append(cross, wrongText);
+
+    // --- camera name, briefly, when C changes the view -------------------
+    this.cameraLabel = this.add(
+      el(
+        "div",
+        `position:fixed;left:50%;top:${mobile ? 90 : 120}px;transform:translateX(-50%);padding:6px 14px;border-radius:6px;background:${PANEL_BG};pointer-events:none;z-index:11;color:#fff;font:600 14px/1 ${MONO};letter-spacing:0.2em;opacity:0;transition:opacity 0.3s`,
+      ),
+    );
 
     // --- g-force, only on a loop ----------------------------------------------
     this.gVignette = this.add(
@@ -242,6 +252,16 @@ export class HUD {
     document.body.appendChild(node);
     this.nodes.push(node);
     return node;
+  }
+
+  /** Names the camera view on screen for a moment. */
+  showCameraMode(label: string): void {
+    this.cameraLabel.textContent = label;
+    this.cameraLabel.style.opacity = "1";
+    if (this.cameraLabelTimer !== null) clearTimeout(this.cameraLabelTimer);
+    this.cameraLabelTimer = setTimeout(() => {
+      this.cameraLabel.style.opacity = "0";
+    }, 1600);
   }
 
   update(d: HudData): void {

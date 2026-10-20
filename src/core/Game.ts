@@ -19,7 +19,7 @@ import type { StartChoice } from "../ui/StartScreen";
 import { QUALITY_PRESETS } from "../settings/GraphicsSettings";
 import { GRID_COLUMNS, GRID_ROWS, PLAYER_GRID_SLOT, gridPose } from "../track/StartGrid";
 import { attackDuration, ATTACKS, AttackKind } from "../combat/AttackDefinitions";
-import { ChaseCamera } from "../camera/ChaseCamera";
+import { CameraRig, CAMERA_LABELS } from "../camera/CameraRig";
 import { EngineAudio } from "../audio/EngineAudio";
 import { ROAD_HALF_WIDTH, TrackDefinition } from "../track/TrackDefinition";
 import { pickTrack } from "../track/tracks";
@@ -118,7 +118,7 @@ export class Game {
   private readonly playerAutopilot: OpponentAI;
   private autopilotEngaged = false;
 
-  private readonly chaseCamera: ChaseCamera;
+  private readonly cameraRig: CameraRig;
   private readonly engineAudio = new EngineAudio();
 
   private readonly accumulator = new FixedStepAccumulator();
@@ -249,7 +249,7 @@ export class Game {
       racer.driver = racer.baseDriver;
     }
 
-    this.chaseCamera = new ChaseCamera(this.camera, this.physics);
+    this.cameraRig = new CameraRig(this.camera, this.physics, this.track);
     this.telemetry = import.meta.env.DEV ? new Telemetry(this.player, this.track, this.nitro) : null;
     if (this.telemetry) {
       console.info(`[telemetry] logging the player's bike at 10 Hz to logs/telemetry-${this.telemetry.session}.csv — press M to mark a moment`);
@@ -773,7 +773,7 @@ export class Game {
     suspension.add(cfg, "gradeFollowing", 0, 1, 0.05).name("follow grade (0=off)");
     suspension.close();
 
-    const cam = this.chaseCamera.tuning;
+    const cam = this.cameraRig.chase.tuning;
     const camera = gui.addFolder("Chase Camera");
     camera.add(cam, "followDistance", 2, 14, 0.1).name("distance");
     camera.add(cam, "extraDistanceAtSpeed", 0, 8, 0.1).name("+ distance at speed");
@@ -902,7 +902,7 @@ export class Game {
     for (const behavior of this.combatBehaviors) behavior.reset();
     this.nitro.reset();
     this.player.bike.controller.setBoost(false);
-    this.chaseCamera.setReversed(false);
+    this.cameraRig.setReversed(false);
     this.finishedCount = 0;
     this.raceClock = 0;
     this.endScreenTimer = -1;
@@ -1002,7 +1002,7 @@ export class Game {
       );
       // Requested directly: once the player crosses the line, watch who
       // finishes next instead of staring at the empty road ahead.
-      if (racer.isPlayer) this.chaseCamera.setReversed(true);
+      if (racer.isPlayer) this.cameraRig.setReversed(true);
     });
   }
 
@@ -1042,6 +1042,7 @@ export class Game {
     for (let i = 0; i < steps; i++) {
       if (this.input.wasJustPressed("KeyO")) this.setAutopilot(!this.autopilotEngaged);
       if (this.input.wasJustPressed("KeyT")) this.toggleTransmissionMode();
+      if (this.input.wasJustPressed("KeyC")) this.hud.showCameraMode(CAMERA_LABELS[this.cameraRig.cycle()]);
       if (this.input.wasJustPressed("KeyX")) this.debugKnockDown(this.player);
       if (this.input.wasJustPressed("KeyZ")) this.debugKnockDown(this.nearestOpponent());
       if (this.input.wasJustPressed("KeyM")) this.telemetry?.mark();
@@ -1114,7 +1115,10 @@ export class Game {
       racer.rider.syncRender(this.accumulator.alpha);
     }
     // The camera watches the rider, not the bike, once they've been thrown off.
-    this.chaseCamera.update(this.player.bike, this.player.rider.cameraPosition, frameDelta);
+    this.cameraRig.update(this.player.bike, this.player.rider.cameraPosition, frameDelta, {
+      riding: this.player.rider.isRiding,
+      distanceAlong: this.player.distanceAlong,
+    });
     this.animationClock += frameDelta;
     this.builtTrack.animate(this.animationClock);
     focusSunOn(this.sunLight, this.player.rider.cameraPosition);

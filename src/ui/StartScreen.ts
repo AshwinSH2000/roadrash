@@ -59,6 +59,7 @@ const CONTROLS: readonly [string, string][] = [
   ["N", "nitro"],
   ["Q / E", "shift down/up (manual)"],
   ["T", "manual ⇄ automatic"],
+  ["C", "change camera"],
   ["space", "pause"],
   ["tilt", "steer (touch devices)"],
 ];

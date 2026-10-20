@@ -111,6 +111,15 @@ export class ChaseCamera {
     this.camera.updateProjectionMatrix();
   }
 
+  /** Forgets where the camera was, so the next update puts it straight on its mark. Used when switching back to this view. */
+  reset(): void {
+    this.initialised = false;
+    this.currentFov = this.config.baseFov;
+    this.positionVelocity.set(0, 0, 0);
+    this.lookVelocity.set(0, 0, 0);
+    this.driftBlend = 0;
+  }
+
   get tuning(): ChaseCameraConfig {
     return this.config;
   }

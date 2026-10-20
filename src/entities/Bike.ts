@@ -268,6 +268,21 @@ export class Bike {
   }
 
   /** Parents something to the bike's group so it rides with the chassis, lean and pitch included. */
+  /** The bike's drawn transform, leaned and pitched — what a camera riding on the bike hangs from. */
+  get renderGroup(): THREE.Object3D {
+    return this.group;
+  }
+
+  /** The rider's helmet, for a camera at his eyes; null until a rider is attached. */
+  get riderHead(): THREE.Object3D | null {
+    return this.riderPose?.head ?? null;
+  }
+
+  /** Hides or shows the rider's helmet, so a camera inside it does not see the inside. */
+  setRiderHeadVisible(visible: boolean): void {
+    this.riderPose?.setHeadVisible(visible);
+  }
+
   addRiderObject(object: THREE.Object3D): void {
     this.group.add(object);
   }

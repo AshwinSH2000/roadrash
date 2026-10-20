@@ -166,7 +166,7 @@ console.log(`heading          ${report.headingDeg.toFixed(1)} deg, corrected to 
 const radiusError = Math.abs(report.fittedWheelRadius - report.expectedWheelRadius) / report.expectedWheelRadius;
 console.log(
   `wheel radius     ${report.fittedWheelRadius.toFixed(3)} m fitted vs ` +
-    `${report.expectedWheelRadius.toFixed(3)} m in physics (${(radiusError * 100).toFixed(1)}% off)`,
+    `${report.expectedWheelRadius.toFixed(3)} m in physics (${(radiusError * 100).toFixed(1)}% off); wheels scaled x${report.wheelScale.toFixed(3)} to match`,
 );
 
 // Build one instance and measure it, which is what the game will actually draw.

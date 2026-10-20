@@ -43,6 +43,8 @@ const entries = {
   ridesteer: "rider-steer-probe.ts",
   stunt: "stunt-sim.ts",
   drift: "drift-probe.ts",
+  wheelfit: "wheel-fit-probe.ts",
+  bikefit: "bike-fit-world-probe.ts",
   wheelalign: "wheel-align-probe.ts",
   camera: "camera-probe.ts",
   tone: "ragdoll-tone-probe.ts",

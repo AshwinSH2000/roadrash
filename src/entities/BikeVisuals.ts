@@ -42,6 +42,14 @@ export interface BikeVisuals {
     object: THREE.Object3D;
     axis: THREE.Vector3;
   };
+  /**
+   * How far, in metres, the body (and the rider on it) is raised above the
+   * chassis centre's frame. A loaded model is fitted to wheels hung at the
+   * springs' full extension, but the bike stands on sagged springs, so the
+   * wheels sit higher in the frame than that and the body has to come up to
+   * meet them. Zero for the placeholder.
+   */
+  bodyLift: number;
   dispose(): void;
 }
 
@@ -58,6 +66,17 @@ export type BikeVisualsFactory = (color: number) => BikeVisuals;
  */
 export const REST_HUB_Y =
   -DEFAULT_VEHICLE_CONFIG.chassisHalfExtents.y - DEFAULT_VEHICLE_CONFIG.suspensionRestLength;
+
+/**
+ * Spring length with the bike standing still on level ground, metres: the
+ * springs sag about 14 cm under its weight. Measured by `wheel-align-probe`
+ * (`node scripts/run-sim.mjs wheelalign`, "standing still"); change it if the
+ * suspension tuning changes.
+ */
+export const STANDING_SUSPENSION_LENGTH = 0.312;
+
+/** Where a model's hubs are fitted to sit versus where they actually are standing: the body must rise by this much. */
+export const STANDING_BODY_LIFT = DEFAULT_VEHICLE_CONFIG.suspensionRestLength - STANDING_SUSPENSION_LENGTH;
 
 /** Disposes geometry and materials the visuals own outright. */
 function disposeOwned(root: THREE.Object3D): void {
@@ -121,6 +140,7 @@ export function createPlaceholderBikeVisuals(color: number): BikeVisuals {
   return {
     body,
     wheels,
+    bodyLift: 0,
     steeringAxis: new THREE.Vector3(0, 1, 0),
     dispose(): void {
       disposeOwned(body);
@@ -169,6 +189,8 @@ export interface BikeFitReport {
   measuredWheelBase: number;
   autoScale: number;
   headingDeg: number;
+  /** Applied to both wheels, about their hubs, to bring the model's tyre up to the physics wheel's size. */
+  wheelScale: number;
   fittedWheelRadius: number;
   expectedWheelRadius: number;
   /** Only meaningful for `auto-split`: which meshes were separated, and what stayed on the body. */
@@ -1309,8 +1331,22 @@ export function makeGltfBikeVisualsFactory(
     ? prepared.steering.axis.clone().applyQuaternion(yawQuat).normalize()
     : new THREE.Vector3(0, 1, 0);
 
+  // The model's tyre comes out a few percent smaller than the physics wheel
+  // (about 0.333 m against 0.35 m), which would leave the drawn wheel floating
+  // above the road. Scaled about the hub, which is each wheel's origin. The
+  // size is measured off the wheel's actual geometry, not the hub finder's
+  // estimate, which reads about 2% low.
+  const tyreRadius = (wheel: THREE.Object3D): number => {
+    wheel.updateMatrixWorld(true);
+    const sizes = new THREE.Box3().setFromObject(wheel, true).getSize(new THREE.Vector3()).toArray().sort((a, b) => b - a);
+    return ((sizes[0] + sizes[1]) / 4) * autoScale;
+  };
+  const measuredRadius = (tyreRadius(prepared.frontWheel) + tyreRadius(prepared.rearWheel)) / 2;
+  const wheelScale = measuredRadius > 0 ? DEFAULT_VEHICLE_CONFIG.wheelRadius / measuredRadius : 1;
+
   const report: BikeFitReport = {
     strategy: prepared.strategy,
+    wheelScale,
     measuredWheelBase,
     autoScale,
     headingDeg: THREE.MathUtils.radToDeg(headingRad),
@@ -1352,19 +1388,19 @@ export function makeGltfBikeVisualsFactory(
 
   const factory: BikeVisualsFactory = (color: number) => {
     /** Wraps a prepared piece in the fit transform. */
-    const wrap = (piece: THREE.Object3D): THREE.Object3D => {
+    const wrap = (piece: THREE.Object3D, extraScale = 1): THREE.Object3D => {
       const outer = new THREE.Group();
       const fit = new THREE.Group();
       fit.quaternion.copy(yawQuat);
-      fit.scale.setScalar(autoScale);
+      fit.scale.setScalar(autoScale * extraScale);
       fit.add(piece.clone(true));
       outer.add(fit);
       return outer;
     };
 
     const wheels: [THREE.Object3D, THREE.Object3D] = [
-      wrap(prepared.frontWheel),
-      wrap(prepared.rearWheel),
+      wrap(prepared.frontWheel, wheelScale),
+      wrap(prepared.rearWheel, wheelScale),
     ];
 
     const body = new THREE.Group();
@@ -1400,6 +1436,7 @@ export function makeGltfBikeVisualsFactory(
     return {
       body,
       wheels,
+      bodyLift: STANDING_BODY_LIFT,
       steeringAxis: steeringAxis.clone(),
       frontAssembly,
       dispose(): void {

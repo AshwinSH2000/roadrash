@@ -50,6 +50,8 @@ export class Bike {
   readonly controller: VehicleController;
   private readonly scene: THREE.Scene;
   private readonly group: THREE.Group;
+  /** Carries the body and the rider, raised to meet the wheels' sagged ride height. See `BikeVisuals.bodyLift`. */
+  private readonly lift: THREE.Group;
   private visuals: BikeVisuals;
   private wheelObjects: [THREE.Object3D, THREE.Object3D];
   private readonly strikeMesh: THREE.Mesh;
@@ -134,8 +136,12 @@ export class Bike {
     this.group = new THREE.Group();
     scene.add(this.group);
 
+    this.lift = new THREE.Group();
+    this.group.add(this.lift);
+
     this.visuals = visualsFactory(color);
-    this.group.add(this.visuals.body);
+    this.lift.position.y = this.visuals.bodyLift;
+    this.lift.add(this.visuals.body);
     this.wheelObjects = this.visuals.wheels;
     scene.add(this.wheelObjects[0], this.wheelObjects[1]);
 
@@ -174,11 +180,12 @@ export class Bike {
    */
   setVisuals(visuals: BikeVisuals): void {
     this.visuals.dispose();
-    this.group.remove(this.visuals.body);
+    this.lift.remove(this.visuals.body);
     this.scene.remove(this.wheelObjects[0], this.wheelObjects[1]);
 
     this.visuals = visuals;
-    this.group.add(visuals.body);
+    this.lift.position.y = visuals.bodyLift;
+    this.lift.add(visuals.body);
     this.wheelObjects = visuals.wheels;
     this.scene.add(this.wheelObjects[0], this.wheelObjects[1]);
   }
@@ -232,10 +239,10 @@ export class Bike {
     ];
   }
 
-  /** Matrix taking `object`'s local space to this bike group's space, from current local transforms. */
+  /** Matrix taking `object`'s local space to the rider's frame (the lifted body's), from current local transforms. */
   private assemblyToGroup(object: THREE.Object3D): THREE.Matrix4 {
     const result = new THREE.Matrix4().identity();
-    for (let node: THREE.Object3D | null = object; node && node !== this.group; node = node.parent) {
+    for (let node: THREE.Object3D | null = object; node && node !== this.lift; node = node.parent) {
       node.updateMatrix();
       result.premultiply(node.matrix);
     }
@@ -264,7 +271,7 @@ export class Bike {
    */
   gripWorld(sign: number, out: THREE.Vector3): THREE.Vector3 {
     this.group.updateMatrixWorld(true);
-    return out.set(GRIP.x * sign, GRIP.y, GRIP.z).applyMatrix4(this.group.matrixWorld);
+    return out.set(GRIP.x * sign, GRIP.y, GRIP.z).applyMatrix4(this.lift.matrixWorld);
   }
 
   /** Parents something to the bike's group so it rides with the chassis, lean and pitch included. */
@@ -284,7 +291,12 @@ export class Bike {
   }
 
   addRiderObject(object: THREE.Object3D): void {
-    this.group.add(object);
+    this.lift.add(object);
+  }
+
+  /** How far the body and rider sit above the chassis centre's frame; the seat is this much higher than the physics body implies. */
+  get rideLift(): number {
+    return this.lift.position.y;
   }
 
   /** See `VehicleController.setRiderAttached` — releases the tip-over locks when riderless. */
@@ -561,6 +573,7 @@ export class Bike {
 
     this.tmpInvQuat.copy(this.group.quaternion).invert();
     this.tmpGroundPoint.subVectors(this.tmpPivot, this.group.position).applyQuaternion(this.tmpInvQuat);
+    this.tmpGroundPoint.y -= this.lift.position.y;
     this.tmpGroundNormal.set(0, 1, 0).applyQuaternion(this.tmpInvQuat);
     rider.setStance(this.footBlend, this.footSide, this.reverseBlend, this.paddlePhase, this.tmpGroundPoint, this.tmpGroundNormal);
   }

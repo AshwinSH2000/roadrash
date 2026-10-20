@@ -107,6 +107,7 @@ export class RiderStateMachine {
   private readonly model: RiderModel;
 
   private readonly tmpSeat = new THREE.Vector3();
+  private readonly tmpLiftOffset = new THREE.Vector3();
   private readonly tmpToBike = new THREE.Vector3();
   private readonly tmpVelocity = new THREE.Vector3();
 
@@ -227,6 +228,7 @@ export class RiderStateMachine {
   private seatPosition(): THREE.Vector3 {
     return this.tmpSeat
       .copy(SEAT_OFFSET)
+      .add(this.tmpLiftOffset.set(0, this.bike.rideLift, 0))
       .applyQuaternion(this.bike.worldQuaternion)
       .add(this.bike.worldPosition);
   }
@@ -384,7 +386,7 @@ export class RiderStateMachine {
     const t = this.runnerBody ? this.runnerBody.translation() : { x: 0, y: RUNNER_FEET_OFFSET, z: 0 };
     this.hopStart.set(t.x, t.y - RUNNER_FEET_OFFSET, t.z);
     // The seated hips in the world, then down to the ground the on-foot figure's origin sits on.
-    this.hopEnd.copy(HIP).applyQuaternion(this.liftEndQuat).add(this.liftEndPos);
+    this.hopEnd.copy(HIP).add(this.tmpLiftOffset.set(0, this.bike.rideLift, 0)).applyQuaternion(this.liftEndQuat).add(this.liftEndPos);
     this.hopEnd.y -= STANDING_HIP_HEIGHT;
     this.state = RiderState.MOUNTING;
     this.timer = 0;

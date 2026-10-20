@@ -47,6 +47,10 @@ export const DEFAULT_CHASE_CAMERA_CONFIG: ChaseCameraConfig = {
   minDistance: 1.8,
 };
 
+/** Seconds for the camera to move onto the travel direction when a drift starts, and back off it when it ends. */
+const DRIFT_BLEND_IN = 0.15;
+const DRIFT_BLEND_OUT = 0.8;
+
 /**
  * Spring-arm third-person chase camera.
  *
@@ -90,6 +94,9 @@ export class ChaseCamera {
   private readonly tmpUp = new THREE.Vector3();
   /** The camera's up: straight up on the ground, the inside of the loop's path on a loop. */
   private readonly tmpBikeUp = new THREE.Vector3();
+  /** 0 when the camera follows the nose, 1 when it follows the direction of travel (drifting). */
+  private driftBlend = 0;
+  private readonly travelDirection = new THREE.Vector3();
   private readonly tmpDesiredTarget = new THREE.Vector3();
   private readonly tmpFocus = new THREE.Vector3();
 
@@ -152,6 +159,7 @@ export class ChaseCamera {
       this.tmpBikeUp.set(0, 1, 0);
       this.tmpBack.copy(LOCAL_BACK).applyQuaternion(bike.worldQuaternion).normalize();
       this.tmpForward.copy(LOCAL_FORWARD).applyQuaternion(bike.worldQuaternion).normalize();
+      this.followTravelDirectionInDrift(bike, dtSeconds);
     }
     // Reversed: the rig sits on the bike's *front* side and looks back over
     // it — swapped here, and only here, so roll below still always follows
@@ -203,6 +211,30 @@ export class ChaseCamera {
       this.camera.fov = this.currentFov;
       this.camera.updateProjectionMatrix();
     }
+  }
+
+  /**
+   * In a drift the nose swings round to side-on in under a second; a camera
+   * hung off it would swing with it and lose the bike. So while drifting the
+   * camera's heading eases from the nose to the direction the bike is
+   * actually travelling, and eases back after, slowly enough that a stopped
+   * bike does not whip the view round.
+   */
+  private followTravelDirectionInDrift(bike: Bike, dtSeconds: number): void {
+    const drifting = bike.controller.isDrifting;
+    const v = bike.controller.chassisBody.linvel();
+    if (drifting && Math.hypot(v.x, v.z) > 3) {
+      this.travelDirection.set(v.x, 0, v.z).normalize();
+    }
+    const rate = drifting ? 1 / DRIFT_BLEND_IN : -1 / DRIFT_BLEND_OUT;
+    this.driftBlend = THREE.MathUtils.clamp(this.driftBlend + rate * dtSeconds, 0, 1);
+    if (this.driftBlend <= 0 || this.travelDirection.lengthSq() < 0.5) return;
+
+    // The nose may be turned well past 90 degrees from the travel direction,
+    // so blend the vectors, not the angles, and keep the camera's pitch flat.
+    this.tmpForward.y = 0;
+    this.tmpForward.normalize().lerp(this.travelDirection, this.driftBlend).normalize();
+    this.tmpBack.copy(this.tmpForward).negate();
   }
 
   /**

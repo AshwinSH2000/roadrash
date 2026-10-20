@@ -2,7 +2,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { PhysicsWorld } from "../physics/PhysicsWorld";
 import { GROUPS_WALL } from "../physics/CollisionGroups";
-import { OFFROAD_HALF_WIDTH, TrackDefinition } from "./TrackDefinition";
+import { CITY_HALF_WIDTH, OFFROAD_HALF_WIDTH, TrackDefinition } from "./TrackDefinition";
 
 /**
  * The invisible wall that stops a rider drifting off the off-road band and
@@ -63,10 +63,12 @@ export function buildBoundaryWalls(
     const tangent = track.sampleTangents[i];
     rotation.setFromUnitVectors(forward, tangent);
 
+    // Through a town the wall stands at the street's edge, in front of the buildings.
+    const wallOffset = track.biomeAt(track.sampleDistances[i]) === "city" ? CITY_HALF_WIDTH : OFFROAD_HALF_WIDTH;
     for (const side of [-1, 1] as const) {
-      const x = center.x + right.x * side * OFFROAD_HALF_WIDTH;
+      const x = center.x + right.x * side * wallOffset;
       const y = center.y + centerLift;
-      const z = center.z + right.z * side * OFFROAD_HALF_WIDTH;
+      const z = center.z + right.z * side * wallOffset;
 
       const collider = physics.world.createCollider(
         RAPIER.ColliderDesc.cuboid(WALL_HALF_THICKNESS, halfHeight, halfLength)

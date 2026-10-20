@@ -95,3 +95,99 @@ for (const layout of TRACKS) {
   );
   scenery.dispose();
 }
+
+console.log("\nrolling hills (medium / high quality):");
+console.log("course               build ms   triangles (med/high)   at the band edge: worst step   highest ground over the nearest road   lowest over ground fill");
+const { buildHills, groundFillHeight } = await import("../src/track/Hills");
+const { QUALITY_PRESETS: presets } = await import("../src/settings/GraphicsSettings");
+for (const layout of TRACKS) {
+  const track = new TrackDefinition(layout);
+  const fillY = groundFillHeight(track);
+  const results: { ms: number; triangles: number }[] = [];
+  let worstStep = 0;
+  let tallest = -Infinity;
+  let lowest = Infinity;
+  for (const level of ["medium", "high"] as const) {
+    const t0 = performance.now();
+    const hills = buildHills(track, presets[level], fillY);
+    const ms = performance.now() - t0;
+    const mesh = hills.group.getObjectByName("hill-terrain") as THREE.Mesh | undefined;
+    results.push({ ms, triangles: mesh ? (mesh.geometry.getIndex()?.count ?? 0) / 3 : 0 });
+    if (level === "high") {
+      // Where the off-road band ends (30 m out), the terrain should be the same height as the band's edge.
+      for (let i = 0; i < track.samplePoints.length; i += 7) {
+        if (track.segmentInFeature(i, "river", true) || track.segmentInFeature(i, "loop", true) || track.segmentInFeature(i, undefined, true)) continue;
+        if (track.biomeAt(track.sampleDistances[i]) === "city") continue;
+        const edge = track.samplePoints[i].clone().addScaledVector(track.sampleRights[i], 30);
+        worstStep = Math.max(worstStep, Math.abs(hills.heightAt(edge.x, edge.z) - (track.samplePoints[i].y - 2.5)));
+      }
+      if (mesh) {
+        // Highest the ground stands over the road nearest to it, and lowest over the ground-fill plane.
+        const p = mesh.geometry.getAttribute("position");
+        for (let n = 0; n < p.count; n += 11) {
+          let best = Infinity;
+          let roadY = 0;
+          for (let i = 0; i < track.samplePoints.length; i += 4) {
+            const q = track.samplePoints[i];
+            const d = (q.x - p.getX(n)) ** 2 + (q.z - p.getZ(n)) ** 2;
+            if (d < best) { best = d; roadY = q.y; }
+          }
+          if (Math.sqrt(best) < 400) tallest = Math.max(tallest, p.getY(n) - roadY);
+          lowest = Math.min(lowest, p.getY(n) - fillY);
+        }
+      }
+    }
+    hills.dispose();
+  }
+  console.log(
+    `${layout.name.padEnd(20)} ${results[0].ms.toFixed(0).padStart(5)}/${results[1].ms.toFixed(0).padEnd(5)}  ${String(results[0].triangles).padStart(8)} / ${String(results[1].triangles).padEnd(8)}  ${worstStep.toFixed(2).padStart(24)} m  ${tallest.toFixed(1).padStart(14)} m over the road beside it  ${lowest.toFixed(1).padStart(10)} m`,
+  );
+}
+
+console.log("\nrivers: terrain must leave the pit open and wall its edge");
+{
+  const { buildHills: build, groundFillHeight: fill } = await import("../src/track/Hills");
+  const { QUALITY_PRESETS: levels } = await import("../src/settings/GraphicsSettings");
+  for (const layout of TRACKS) {
+    const track = new TrackDefinition(layout);
+    const rivers = track.featuresOfKind("river");
+    if (rivers.length === 0) continue;
+    for (const level of ["low", "medium", "high"] as const) {
+      const hills = build(track, levels[level], fill(track));
+      const terrain = hills.group.getObjectByName("hill-terrain") as THREE.Mesh;
+      const gorge = hills.group.getObjectByName("hill-gorge") as THREE.Mesh | undefined;
+      terrain.updateMatrixWorld(true);
+      const ray = new THREE.Raycaster();
+      let covered = 0, tested = 0;
+      let unbuiltAcross = 0;
+      for (const river of rivers) {
+        const a = track.samplePoints[river.startIndex];
+        const b = track.samplePoints[river.endIndex];
+        const length = Math.hypot(b.x - a.x, b.z - a.z);
+        const heading = Math.atan2(b.x - a.x, b.z - a.z);
+        const cx = (a.x + b.x) / 2, cz = (a.z + b.z) / 2;
+        // Straight down through a grid of points over the pit itself.
+        for (let u = -length / 2; u <= length / 2; u += 4) {
+          for (let v = -30; v <= 30; v += 6) {
+            const x = cx + u * Math.sin(heading) + v * Math.cos(heading);
+            const z = cz + u * Math.cos(heading) - v * Math.sin(heading);
+            ray.set(new THREE.Vector3(x, 400, z), new THREE.Vector3(0, -1, 0));
+            tested++;
+            if (ray.intersectObject(terrain, false).length > 0) covered++;
+          }
+        }
+        // How far the terrain stands back from the pit: the first built point along the road's line, either side.
+        for (const sign of [-1, 1]) {
+          for (let off = 0; off < 300; off += 4) {
+            const x = cx + sign * (length / 2 + off) * Math.sin(heading);
+            const z = cz + sign * (length / 2 + off) * Math.cos(heading);
+            ray.set(new THREE.Vector3(x, 400, z), new THREE.Vector3(0, -1, 0));
+            if (ray.intersectObject(terrain, false).length > 0) { unbuiltAcross = Math.max(unbuiltAcross, off); break; }
+          }
+        }
+      }
+      console.log(`  ${layout.name.padEnd(16)} ${level.padEnd(6)} terrain over the pit: ${covered}/${tested} test points   gap along the road before terrain: ${unbuiltAcross.toFixed(0)} m   gorge walls: ${gorge ? gorge.geometry.getIndex()!.count / 6 : 0}`);
+      hills.dispose();
+    }
+  }
+}

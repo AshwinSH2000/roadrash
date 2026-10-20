@@ -26,6 +26,7 @@ import { ROAD_HALF_WIDTH, TrackDefinition } from "../track/TrackDefinition";
 import { pickTrack } from "../track/tracks";
 import { buildTrack, type BuiltTrack } from "../track/TrackBuilder";
 import { buildScenery } from "../track/Scenery";
+import { buildHills, groundFillHeight } from "../track/Hills";
 import { buildClouds } from "../render/Sky";
 import { createPostProcessing, type PostProcessing } from "../render/PostProcessing";
 import { OpponentAI } from "../ai/OpponentAI";
@@ -197,7 +198,9 @@ export class Game {
     this.stunts = new StuntSystem(this.track);
 
     const quality = QUALITY_PRESETS[choice.quality];
-    this.scene.add(buildScenery(this.track, quality).group);
+    const hills = buildHills(this.track, quality, groundFillHeight(this.track));
+    this.scene.add(hills.group);
+    this.scene.add(buildScenery(this.track, quality, hills.heightAt).group);
     this.scene.add(buildClouds(this.track, quality).group);
     this.postProcessing = quality.postProcessing
       ? createPostProcessing(this.renderer, this.scene, this.camera)

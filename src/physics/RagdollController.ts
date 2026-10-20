@@ -41,7 +41,34 @@ export interface BoneSpec {
    * measured from the straight pose), so limbs fold the way limbs do.
    */
   hinge?: { min: number; max: number };
+  /**
+   * Muscle tone on a ball joint: how hard it pulls the bone back toward the
+   * straight pose, and how much it resists being swung. Without it every
+   * joint is a free swivel and the body folds like a sack. Given as a
+   * natural frequency (rad/s) and damping ratio, so the torque scales with
+   * the bones' own inertia — a stiffness in N·m/rad tuned for a torso blows
+   * up a 2 kg forearm. `limit` is the swing, in radians, past which the pull
+   * stiffens sharply: a joint's range, so a spine cannot fold double or a
+   * neck turn the head backwards.
+   */
+  tone?: { frequency: number; damping: number; limit: number };
 }
+
+/**
+ * Muscle tone per joint. Strong in the spine and neck (a body's core holds
+ * its shape), moderate at the hips, light at the shoulders where arms are
+ * free to fling. `RAGDOLL_TONE.scale` multiplies every joint's stiffness
+ * (its square root, in frequency terms) — 0 is the old limp ragdoll.
+ */
+const SPINE_TONE = { frequency: 13, damping: 0.6, limit: 0.5 };
+const NECK_TONE = { frequency: 14, damping: 0.7, limit: 0.6 };
+const SHOULDER_TONE = { frequency: 8, damping: 0.5, limit: 1.8 };
+const HIP_TONE = { frequency: 10, damping: 0.6, limit: 1.1 };
+
+export const RAGDOLL_TONE = { scale: 1 };
+/** Seconds the tone holds at full strength after the fall begins, then the seconds it takes to let go. */
+const TONE_HOLD = 1.2;
+const TONE_RELAX = 1.5;
 
 /** Knees fold the shin backward and elbows the forearm forward; neither bends the other way. */
 const KNEE_LIMITS = { min: 0, max: 2.5 };
@@ -58,6 +85,7 @@ export const BONES: readonly BoneSpec[] = [
     parent: "pelvis",
     anchorOnParent: new THREE.Vector3(0, 0.14, 0),
     anchorOnSelf: new THREE.Vector3(0, -0.22, 0),
+    tone: SPINE_TONE,
   },
   {
     name: "head",
@@ -68,6 +96,7 @@ export const BONES: readonly BoneSpec[] = [
     parent: "torso",
     anchorOnParent: new THREE.Vector3(0, 0.2, 0),
     anchorOnSelf: new THREE.Vector3(0, -0.14, 0),
+    tone: NECK_TONE,
   },
   {
     name: "upperArmLeft",
@@ -78,6 +107,7 @@ export const BONES: readonly BoneSpec[] = [
     parent: "torso",
     anchorOnParent: new THREE.Vector3(0.17, 0.14, 0),
     anchorOnSelf: new THREE.Vector3(0, 0.16, 0),
+    tone: SHOULDER_TONE,
   },
   {
     name: "foreArmLeft",
@@ -99,6 +129,7 @@ export const BONES: readonly BoneSpec[] = [
     parent: "torso",
     anchorOnParent: new THREE.Vector3(-0.17, 0.14, 0),
     anchorOnSelf: new THREE.Vector3(0, 0.16, 0),
+    tone: SHOULDER_TONE,
   },
   {
     name: "foreArmRight",
@@ -120,6 +151,7 @@ export const BONES: readonly BoneSpec[] = [
     parent: "pelvis",
     anchorOnParent: new THREE.Vector3(0.11, -0.12, 0),
     anchorOnSelf: new THREE.Vector3(0, 0.21, 0),
+    tone: HIP_TONE,
   },
   {
     name: "lowerLegLeft",
@@ -141,6 +173,7 @@ export const BONES: readonly BoneSpec[] = [
     parent: "pelvis",
     anchorOnParent: new THREE.Vector3(-0.11, -0.12, 0),
     anchorOnSelf: new THREE.Vector3(0, 0.21, 0),
+    tone: HIP_TONE,
   },
   {
     name: "lowerLegRight",
@@ -200,6 +233,12 @@ export class RagdollController {
   private aliveFor = 0;
 
   private readonly tmpVec = new THREE.Vector3();
+  private readonly tmpParent = new THREE.Quaternion();
+  private readonly tmpChild = new THREE.Quaternion();
+  private readonly tmpRel = new THREE.Quaternion();
+  private readonly tmpErr = new THREE.Vector3();
+  private readonly tmpRelVel = new THREE.Vector3();
+  private readonly tmpTorque = new THREE.Vector3();
 
   constructor(
     private readonly physics: PhysicsWorld,
@@ -320,6 +359,7 @@ export class RagdollController {
     if (!this.isActive) return false;
     this.aliveFor += dtSeconds;
     this.captureBones();
+    this.applyTone(dtSeconds);
 
     let moving = false;
     for (const bone of this.bones) {
@@ -333,6 +373,75 @@ export class RagdollController {
 
     this.stillFor = moving ? 0 : this.stillFor + dtSeconds;
     return this.stillFor >= SETTLE_HOLD || this.aliveFor >= SETTLE_TIMEOUT;
+  }
+
+  private meanInertia(body: RAPIER.RigidBody): number {
+    const i = body.principalInertia();
+    return (i.x + i.y + i.z) / 3;
+  }
+
+  /**
+   * Muscle tone: a spring-damper torque on each ball joint, equal and
+   * opposite on the two bones, pulling the child back toward the straight
+   * pose. The pull is a plain spring up to the joint's `limit` and several
+   * times stiffer beyond it, which is what stops a fold going all the way
+   * through. Applied as an impulse each step, so it needs no clearing.
+   */
+  private applyTone(dt: number): void {
+    // The muscles hold the body's shape through the tumble and let go once
+    // it is down, so it lies the way a body lies rather than staying braced —
+    // and the settle test is not fighting a tone that never lets go.
+    const relax = THREE.MathUtils.clamp((this.aliveFor - TONE_HOLD) / TONE_RELAX, 0, 1);
+    const scale = RAGDOLL_TONE.scale * (1 - relax * relax * (3 - 2 * relax));
+    if (scale <= 0.001) return;
+    const byName = new Map(this.bones.map((b) => [b.spec.name, b]));
+    for (const bone of this.bones) {
+      const tone = bone.spec.tone;
+      const parent = bone.spec.parent ? byName.get(bone.spec.parent) : undefined;
+      if (!tone || !parent) continue;
+
+      const pr = parent.body.rotation();
+      const cr = bone.body.rotation();
+      this.tmpParent.set(pr.x, pr.y, pr.z, pr.w);
+      this.tmpChild.set(cr.x, cr.y, cr.z, cr.w);
+      // Child's rotation relative to the parent, as a rotation vector: the
+      // spawn pose is the straight pose, so zero rotation is "straight".
+      this.tmpRel.copy(this.tmpParent).invert().multiply(this.tmpChild);
+      // sin(angle) times the axis, i.e. 2 w (x, y, z): the same as the angle
+      // for small swings, but continuous across a half turn. The plain
+      // rotation vector flips direction there, and a spring that flips at
+      // 180 degrees pushes a spinning bone round for ever.
+      const angle = 2 * Math.acos(Math.min(1, Math.abs(this.tmpRel.w)));
+      const error = this.tmpErr.set(this.tmpRel.x, this.tmpRel.y, this.tmpRel.z).multiplyScalar(2 * this.tmpRel.w);
+      const over = Math.max(0, angle - tone.limit);
+      const w0 = tone.frequency * Math.sqrt(scale);
+      const gain = w0 * w0 * (1 + 6 * (over / Math.max(tone.limit, 0.1)) + 0.5 * angle * angle);
+      const damp = 2 * tone.damping * w0;
+
+      const va = parent.body.angvel();
+      const vb = bone.body.angvel();
+      // Relative angular velocity, in the parent's frame.
+      this.tmpRelVel.set(vb.x - va.x, vb.y - va.y, vb.z - va.z).applyQuaternion(this.tmpParent.clone().invert());
+
+      // Acceleration the joint asks for, in the parent's frame.
+      this.tmpTorque.copy(error).multiplyScalar(-gain).addScaledVector(this.tmpRelVel, -damp);
+      // Turned into a torque axis by axis in the child's own frame, each with
+      // that axis's inertia: a capsule spins about its length far more easily
+      // than it tumbles end over end, and one inertia for all three made the
+      // twist about the length ring forever.
+      this.tmpTorque.applyQuaternion(this.tmpParent).applyQuaternion(this.tmpChild.clone().invert());
+      const ic = bone.body.principalInertia();
+      const ip = this.meanInertia(parent.body);
+      this.tmpTorque.set(
+        this.tmpTorque.x * ((ic.x * ip) / Math.max(ic.x + ip, 1e-6)),
+        this.tmpTorque.y * ((ic.y * ip) / Math.max(ic.y + ip, 1e-6)),
+        this.tmpTorque.z * ((ic.z * ip) / Math.max(ic.z + ip, 1e-6)),
+      );
+      this.tmpTorque.applyQuaternion(this.tmpChild);
+      const t = this.tmpTorque.multiplyScalar(dt);
+      bone.body.applyTorqueImpulse({ x: t.x, y: t.y, z: t.z }, true);
+      parent.body.applyTorqueImpulse({ x: -t.x, y: -t.y, z: -t.z }, true);
+    }
   }
 
   /**

@@ -450,6 +450,11 @@ export interface RagdollPartSpec {
  * The physics stays one rigid capsule per limb; only what is drawn changes.
  */
 export class RagdollVisuals {
+  /** Long-range detail on or off for the fall's figure. */
+  setFar(far: boolean): void {
+    this.figure?.setFar(far);
+  }
+
   private readonly materials: RiderMaterials;
   /**
    * The skinned rider, when `rider.glb` is loaded: it follows the ragdoll's bodies (see
@@ -686,6 +691,11 @@ export class RiderModel {
     mount.add(eye);
     this.eyeAnchor = eye;
     this.drive();
+  }
+
+  /** Long-range detail on or off for the skinned figure (the boxed rider has no other level). */
+  setFar(far: boolean): void {
+    this.character?.setFar(far);
   }
 
   /** Hands the pose that was just solved to the skinned figure. */

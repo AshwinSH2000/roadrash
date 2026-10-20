@@ -106,10 +106,91 @@ const GARMENTS: { garment: Garment; test: (x: number, y: number) => boolean }[] 
   { garment: "trim", test: (x, y) => Math.abs(x) <= 14 && y >= 142.5 && y <= 146.5 },
   { garment: "gloves", test: (x) => Math.abs(x) > 66 },
   { garment: "boots", test: (_x, y) => y < 16 },
-  // The collar stops at the neck (|x| < 9); out from it the jacket carries on up over the shoulders.
-  { garment: "jacket", test: (x, y) => (Math.abs(x) <= 20 ? y >= 88 && y <= (Math.abs(x) < 9 ? 146.5 : 156) : Math.abs(x) <= 66 && y >= 124 && y <= 156) },
+  // A stand-up collar covers the neck (|x| < 9) to just under the helmet; out from it the jacket carries on up over the shoulders.
+  { garment: "jacket", test: (x, y) => (Math.abs(x) <= 20 ? y >= 88 && y <= (Math.abs(x) < 9 ? 152 : 156) : Math.abs(x) <= 66 && y >= 124 && y <= 156) },
   { garment: "trousers", test: (x, y) => Math.abs(x) <= 30 && y >= 16 && y < 100 },
 ];
+
+/**
+ * Cell sizes, cm, for thinning each garment by vertex clustering: close up
+ * (hands go from every finger to a rounded glove, cloth is thinned lightly)
+ * and far away (a few thousand triangles for the whole rider).
+ */
+const DETAIL_CELL: Record<"near" | "far", Record<Garment, number>> = {
+  near: { jacket: 1.5, trim: 1.5, trousers: 1.5, gloves: 1.3, boots: 1.4, soles: 1.6 },
+  far: { jacket: 4.5, trim: 4.5, trousers: 4.5, gloves: 3.5, boots: 3.5, soles: 4 },
+};
+
+/**
+ * Thins a mesh by clustering: vertices that fall in the same grid cell become
+ * one, at their average, standing for the skin weights of whichever member is
+ * nearest that average; triangles that collapse are dropped. Vertices on an
+ * open edge keep their place, so neighbouring garments still meet exactly.
+ */
+function thin(
+  points: THREE.Vector3[],
+  indices: number[],
+  pinned: Uint8Array,
+  cell: number,
+  skin: { index: Uint16Array; weight: Float32Array },
+): { points: THREE.Vector3[]; indices: number[]; skinIndex: Uint16Array; skinWeight: Float32Array } {
+  const cluster = new Int32Array(points.length);
+  const members: number[][] = [];
+  const byCell = new Map<string, number>();
+  points.forEach((p, n) => {
+    if (pinned[n] || cell <= 0) {
+      cluster[n] = members.length;
+      members.push([n]);
+      return;
+    }
+    const key = `${Math.floor(p.x / cell)},${Math.floor(p.y / cell)},${Math.floor(p.z / cell)}`;
+    let id = byCell.get(key);
+    if (id === undefined) {
+      id = members.length;
+      byCell.set(key, id);
+      members.push([]);
+    }
+    cluster[n] = id;
+    members[id].push(n);
+  });
+
+  const outPoints: THREE.Vector3[] = [];
+  const skinIndex = new Uint16Array(members.length * 4);
+  const skinWeight = new Float32Array(members.length * 4);
+  members.forEach((group, g) => {
+    const centre = new THREE.Vector3();
+    group.forEach((n) => centre.add(points[n]));
+    centre.multiplyScalar(1 / group.length);
+    outPoints.push(group.length === 1 ? points[group[0]].clone() : centre);
+    // The merged vertex moves with all of its members: their weights per bone, averaged, the four strongest kept.
+    const blend = new Map<number, number>();
+    for (const n of group) {
+      for (let k = 0; k < 4; k++) {
+        const w = skin.weight[n * 4 + k];
+        if (w > 0) blend.set(skin.index[n * 4 + k], (blend.get(skin.index[n * 4 + k]) ?? 0) + w / group.length);
+      }
+    }
+    const top = [...blend.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+    const sum = top.reduce((total, [, w]) => total + w, 0) || 1;
+    top.forEach(([bone, w], k) => {
+      skinIndex[g * 4 + k] = bone;
+      skinWeight[g * 4 + k] = w / sum;
+    });
+  });
+  const outIndices: number[] = [];
+  const seen = new Set<string>();
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = cluster[indices[t]];
+    const b = cluster[indices[t + 1]];
+    const c = cluster[indices[t + 2]];
+    if (a === b || b === c || a === c) continue;
+    const key = [a, b, c].sort((x, y) => x - y).join("-");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    outIndices.push(a, b, c);
+  }
+  return { points: outPoints, indices: outIndices, skinIndex, skinWeight };
+}
 
 /** How far (cm) gloves, boots and soles stand off the skin: they are fitted, not loose. */
 const FITTED_OFFSET: Partial<Record<Garment, number>> = { gloves: 1.5, boots: 2.3, soles: 2.6 };
@@ -307,29 +388,39 @@ function cutGarments(root: THREE.Object3D): void {
       }
     }
 
-    const out = new THREE.BufferGeometry();
-    const outPosition = new Float32Array(count * 3);
-    const outSkinIndex = new Uint16Array(count * 4);
-    const outSkinWeight = new Float32Array(count * 4);
+    // Each welded vertex's own skin weights, read once.
+    const ownSkinIndex = new Uint16Array(count * 4);
+    const ownSkinWeight = new Float32Array(count * 4);
     originals.forEach((v, n) => {
-      outPosition.set([points[n].x, points[n].y, points[n].z], n * 3);
-      outSkinIndex.set([skinIndex.getX(v), skinIndex.getY(v), skinIndex.getZ(v), skinIndex.getW(v)], n * 4);
-      outSkinWeight.set([skinWeight.getX(v), skinWeight.getY(v), skinWeight.getZ(v), skinWeight.getW(v)], n * 4);
+      ownSkinIndex.set([skinIndex.getX(v), skinIndex.getY(v), skinIndex.getZ(v), skinIndex.getW(v)], n * 4);
+      ownSkinWeight.set([skinWeight.getX(v), skinWeight.getY(v), skinWeight.getZ(v), skinWeight.getW(v)], n * 4);
     });
-    out.setAttribute("position", new THREE.BufferAttribute(outPosition, 3));
-    out.setAttribute("skinIndex", new THREE.BufferAttribute(outSkinIndex, 4));
-    out.setAttribute("skinWeight", new THREE.BufferAttribute(outSkinWeight, 4));
-    out.setIndex(indices);
-    // Smooth cloth shading from the reshaped surface itself, not the body's.
-    out.computeVertexNormals();
 
-    const mesh = new THREE.SkinnedMesh(out, source.material);
-    mesh.name = `garment:${garment}`;
-    mesh.userData.garment = garment;
-    mesh.castShadow = true;
-    mesh.frustumCulled = false;
-    mesh.bind(source.skeleton, source.bindMatrix);
-    source.parent?.add(mesh);
+    // Two levels of detail from the same cloth: the full mesh, thinned a little, for close up, and a coarse one for riders far away.
+    for (const lod of ["near", "far"] as const) {
+      const cell = DETAIL_CELL[lod][garment];
+      const thinned = thin(points, indices, pinned, cell, { index: ownSkinIndex, weight: ownSkinWeight });
+      const total = thinned.points.length;
+      const out = new THREE.BufferGeometry();
+      const outPosition = new Float32Array(total * 3);
+      thinned.points.forEach((p, n) => outPosition.set([p.x, p.y, p.z], n * 3));
+      out.setAttribute("position", new THREE.BufferAttribute(outPosition, 3));
+      out.setAttribute("skinIndex", new THREE.BufferAttribute(thinned.skinIndex, 4));
+      out.setAttribute("skinWeight", new THREE.BufferAttribute(thinned.skinWeight, 4));
+      out.setIndex(thinned.indices);
+      // Smooth cloth shading from the reshaped surface itself, not the body's.
+      out.computeVertexNormals();
+
+      const mesh = new THREE.SkinnedMesh(out, source.material);
+      mesh.name = `garment:${garment}:${lod}`;
+      mesh.userData.garment = garment;
+      mesh.userData.lod = lod;
+      mesh.castShadow = true;
+      mesh.frustumCulled = false;
+      mesh.visible = lod === "near";
+      mesh.bind(source.skeleton, source.bindMatrix);
+      source.parent?.add(mesh);
+    }
   }
   // Skin under a garment is never seen, and drawing it would double the cost of every rider.
   geometry.setIndex(bare);
@@ -396,6 +487,10 @@ export class RiderCharacter {
 
   /** This rider's clothes. */
   private readonly materials: THREE.Material[] = [];
+  /** The clothes at full detail and at long-range detail; exactly one set is drawn. */
+  private readonly nearMeshes: THREE.SkinnedMesh[] = [];
+  private readonly farMeshes: THREE.SkinnedMesh[] = [];
+  private far = false;
 
   constructor(scene: THREE.Object3D, color: number, scale = 1) {
     scene.scale.multiplyScalar(scale);
@@ -419,6 +514,7 @@ export class RiderCharacter {
       const mesh = o as THREE.SkinnedMesh;
       const garment = mesh.userData?.garment as string | undefined;
       if (mesh.isSkinnedMesh && garment && palette[garment]) mesh.material = palette[garment];
+      if (mesh.isSkinnedMesh && mesh.userData?.lod) (mesh.userData.lod === "far" ? this.farMeshes : this.nearMeshes).push(mesh);
     });
 
     scene.traverse((o) => {
@@ -778,6 +874,14 @@ export class RiderCharacter {
 
   setVisible(visible: boolean): void {
     this.holder.visible = visible;
+  }
+
+  /** Draws the long-range clothes (a few thousand triangles for the whole rider) instead of the full ones. */
+  setFar(far: boolean): void {
+    if (far === this.far) return;
+    this.far = far;
+    for (const mesh of this.nearMeshes) mesh.visible = !far;
+    for (const mesh of this.farMeshes) mesh.visible = far;
   }
 
   dispose(): void {

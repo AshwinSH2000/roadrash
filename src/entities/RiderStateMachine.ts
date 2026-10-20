@@ -79,6 +79,8 @@ export class RiderStateMachine {
   private timer = 0;
 
   private readonly ragdoll: RagdollController;
+  private readonly ragdollVisuals: RagdollVisuals;
+  private far = false;
   private readonly ragdollFigure: RiderCharacter | null;
   private runnerBody: RAPIER.RigidBody | null = null;
   /** The on-foot figure: the same jointed rider, posed standing, getting up or running. */
@@ -122,7 +124,7 @@ export class RiderStateMachine {
     this.model = new RiderModel(color);
     this.bike.addRiderObject(this.model.object);
     this.bike.attachRiderHands(this.model);
-    const ragdollVisuals = new RagdollVisuals(color);
+    const ragdollVisuals = (this.ragdollVisuals = new RagdollVisuals(color));
     this.ragdoll = new RagdollController(physics, scene, color, ragdollVisuals);
     // The skinned figure that wears the tumble, when there is one; shown only while the ragdoll is live.
     this.ragdollFigure = ragdollVisuals.figure;
@@ -131,6 +133,19 @@ export class RiderStateMachine {
     this.runner = new RiderModel(color);
     this.runner.setVisible(false);
     this.scene.add(this.runner.object);
+  }
+
+  /**
+   * Chooses the rider's level of detail from how far the camera is: the long-range clothes
+   * beyond 50 m, back to full detail inside 38 m (the gap stops a rider on the boundary flickering).
+   */
+  setDetailDistance(metres: number): void {
+    const far = this.far ? metres > 38 : metres > 50;
+    if (far === this.far) return;
+    this.far = far;
+    this.model.setFar(far);
+    this.runner.setFar(far);
+    this.ragdollVisuals.setFar(far);
   }
 
   /** Plays the seated rider's baton swing or standing kick; see `RiderModel.setAttack`. */

@@ -1124,6 +1124,7 @@ export class Game {
       racer.rider.syncRender(this.accumulator.alpha);
     }
     // The camera watches the rider, not the bike, once they've been thrown off.
+    for (const racer of this.racers) racer.rider.setDetailDistance(this.camera.position.distanceTo(racer.bike.worldPosition));
     this.cameraRig.update(this.player.bike, this.player.rider.cameraPosition, frameDelta, {
       riding: this.player.rider.isRiding,
       distanceAlong: this.player.distanceAlong,

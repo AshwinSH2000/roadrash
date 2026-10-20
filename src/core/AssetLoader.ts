@@ -14,6 +14,7 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
  */
 export const ASSET_PATHS = {
   bike: ["assets/bike.glb"],
+  rider: ["assets/rider.glb"],
 } as const;
 
 export type AssetKey = keyof typeof ASSET_PATHS;

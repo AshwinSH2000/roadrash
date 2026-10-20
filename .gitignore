@@ -29,3 +29,6 @@ dist-ssr
 
 
 *.tsbuildinfo
+
+# Large original model files that are optimised into public/assets (see scripts/optimize-rider.mjs)
+source-assets/

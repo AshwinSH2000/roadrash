@@ -88,7 +88,7 @@ export class ChaseCamera {
   private readonly tmpArmLook = new THREE.Vector3();
   private readonly tmpDir = new THREE.Vector3();
   private readonly tmpUp = new THREE.Vector3();
-  /** The camera's up: always straight up, on a loop as well. */
+  /** The camera's up: straight up on the ground, the inside of the loop's path on a loop. */
   private readonly tmpBikeUp = new THREE.Vector3();
   private readonly tmpDesiredTarget = new THREE.Vector3();
   private readonly tmpFocus = new THREE.Vector3();
@@ -137,12 +137,22 @@ export class ChaseCamera {
     // Built from the physics (yaw-only) orientation on purpose: hanging the
     // camera off the leaned/pitched visual transform would swing the whole
     // world every time the bike tips into a corner.
-    // The camera's roll is locked to the world on a loop too: the bike turns
-    // over, the horizon does not, and any wobble in the bike's attitude never
-    // reaches the picture.
-    this.tmpBikeUp.set(0, 1, 0);
-    this.tmpBack.copy(LOCAL_BACK).applyQuaternion(bike.worldQuaternion).normalize();
-    this.tmpForward.copy(LOCAL_FORWARD).applyQuaternion(bike.worldQuaternion).normalize();
+    // On a loop the camera is built from the loop's own smooth path (direction
+    // of travel and the ribbon's inward normal), not from the bike's attitude:
+    // it turns over with the loop but has no roll of its own, and any wobble in
+    // the bike never reaches the picture. A world-up lock was tried and spun
+    // the camera half a turn whenever the bike climbed straight up, where
+    // "up" and the view direction coincide.
+    const ride = bike.controller.currentLoopRide;
+    if (ride) {
+      this.tmpBikeUp.copy(ride.normal);
+      this.tmpForward.copy(ride.tangent);
+      this.tmpBack.copy(ride.tangent).negate();
+    } else {
+      this.tmpBikeUp.set(0, 1, 0);
+      this.tmpBack.copy(LOCAL_BACK).applyQuaternion(bike.worldQuaternion).normalize();
+      this.tmpForward.copy(LOCAL_FORWARD).applyQuaternion(bike.worldQuaternion).normalize();
+    }
     // Reversed: the rig sits on the bike's *front* side and looks back over
     // it — swapped here, and only here, so roll below still always follows
     // the bike's true heading rather than flipping sign when reversed.

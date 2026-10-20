@@ -162,6 +162,11 @@ export class LoopRide {
     return this.heightSpeed;
   }
 
+  /** Unit direction of travel along the path. */
+  get tangent(): THREE.Vector3 {
+    return this.frame.tangent;
+  }
+
   /** Unit vector the road pushes along: into the loop. */
   get normal(): THREE.Vector3 {
     return this.frame.normal;

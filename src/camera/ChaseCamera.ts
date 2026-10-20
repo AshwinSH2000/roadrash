@@ -2,7 +2,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { Bike } from "../entities/Bike";
 import type { PhysicsWorld } from "../physics/PhysicsWorld";
-import { LOCAL_BACK, LOCAL_FORWARD, LOCAL_UP } from "../utils/Directions";
+import { LOCAL_BACK, LOCAL_FORWARD } from "../utils/Directions";
 
 
 
@@ -88,7 +88,7 @@ export class ChaseCamera {
   private readonly tmpArmLook = new THREE.Vector3();
   private readonly tmpDir = new THREE.Vector3();
   private readonly tmpUp = new THREE.Vector3();
-  /** The bike's own up: straight up while riding on the ground (the physics body is yaw-only), the inside of the loop on a loop. */
+  /** The camera's up: always straight up, on a loop as well. */
   private readonly tmpBikeUp = new THREE.Vector3();
   private readonly tmpDesiredTarget = new THREE.Vector3();
   private readonly tmpFocus = new THREE.Vector3();
@@ -137,10 +137,10 @@ export class ChaseCamera {
     // Built from the physics (yaw-only) orientation on purpose: hanging the
     // camera off the leaned/pitched visual transform would swing the whole
     // world every time the bike tips into a corner.
-    // Only a loop turns the camera's world over with the bike; a riderless
-    // bike tumbling on the road must not take the camera underground with it.
-    if (bike.controller.currentLoopRide) this.tmpBikeUp.copy(LOCAL_UP).applyQuaternion(bike.worldQuaternion).normalize();
-    else this.tmpBikeUp.set(0, 1, 0);
+    // The camera's roll is locked to the world on a loop too: the bike turns
+    // over, the horizon does not, and any wobble in the bike's attitude never
+    // reaches the picture.
+    this.tmpBikeUp.set(0, 1, 0);
     this.tmpBack.copy(LOCAL_BACK).applyQuaternion(bike.worldQuaternion).normalize();
     this.tmpForward.copy(LOCAL_FORWARD).applyQuaternion(bike.worldQuaternion).normalize();
     // Reversed: the rig sits on the bike's *front* side and looks back over

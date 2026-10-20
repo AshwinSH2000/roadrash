@@ -124,6 +124,25 @@ function buildForestFarmMountainAndCity(
     disposers,
   );
 
+  // Round-crowned trees: a short trunk and a lumpy ball of leaves, each ball its own green.
+  const trunkGeometry = new THREE.CylinderGeometry(0.5, 0.65, 1, 6);
+  trunkGeometry.translate(0, 0.5, 0);
+  const trunks = makePropSlot(
+    trunkGeometry,
+    new THREE.MeshStandardMaterial({ color: 0x5a4030, roughness: 1 }),
+    capacity,
+    "scenery-trunks",
+    disposers,
+  );
+  const crowns = makePropSlot(
+    new THREE.IcosahedronGeometry(1, 1),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true }),
+    capacity,
+    "scenery-crowns",
+    disposers,
+  );
+  const crownColour = new THREE.Color();
+
   const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
   rockGeometry.translate(0, 0.35, 0); // sit partly bedded into the ground rather than floating
   const rocks = makePropSlot(
@@ -182,6 +201,7 @@ function buildForestFarmMountainAndCity(
   const tangent = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
   const forward = new THREE.Vector3(0, 0, 1);
+  const identityQuaternion = new THREE.Quaternion();
   const last = track.samplePoints.length - 1;
 
   for (let i = 0; i < track.samplePoints.length; i += SAMPLE_STRIDE) {
@@ -216,11 +236,32 @@ function buildForestFarmMountainAndCity(
 
       quaternion.setFromAxisAngle(up, Math.random() * Math.PI * 2);
 
+      /** A round tree at this depth: trunk and crown placed together. */
+      const placeRound = (depth: number): void => {
+        const lateral = side * depth + (Math.random() - 0.5) * 3;
+        const along = (Math.random() - 0.5) * 4;
+        position.copy(center).addScaledVector(right, lateral).addScaledVector(tangent, along);
+        position.y = center.y + GROUND_DROP;
+        const height = 3.6 + Math.random() * 2.6;
+        const trunkHeight = height * 0.45;
+        const radius = 1.3 + Math.random() * 1.0;
+        scale.set(0.28, trunkHeight, 0.28);
+        matrix.compose(position, identityQuaternion, scale);
+        trunks.mesh.setMatrixAt(trunks.count++, matrix);
+        position.y += trunkHeight + radius * 0.55;
+        scale.set(radius, radius * 0.88, radius);
+        matrix.compose(position, quaternion, scale);
+        crowns.mesh.setMatrixAt(crowns.count, matrix);
+        crowns.mesh.setColorAt(crowns.count++, crownColour.setHSL(0.24 + Math.random() * 0.07, 0.42 + Math.random() * 0.15, 0.26 + Math.random() * 0.12));
+      };
+
       switch (biome) {
         case "forest": {
           if (Math.random() > quality.sceneryDensity) break;
           const depth = OFFROAD_HALF_WIDTH + 4 + Math.random() * 18;
-          if (Math.random() < 0.7) {
+          if (Math.random() < 0.38) {
+            placeRound(depth);
+          } else if (Math.random() < 0.7) {
             place(trees, depth, 3, 4, () => {
               const radius = 1.1 + Math.random() * 0.9;
               const height = 3.5 + Math.random() * 3.5;
@@ -255,7 +296,9 @@ function buildForestFarmMountainAndCity(
         case "farm": {
           if (Math.random() > quality.sceneryDensity) break;
           const depth = OFFROAD_HALF_WIDTH + 2 + Math.random() * 13;
-          if (Math.random() < 0.6) {
+          if (Math.random() < 0.22) {
+            placeRound(depth);
+          } else if (Math.random() < 0.6) {
             place(cows, depth, 4, 5, () => scale.set(0.9, 1.1, 1.9), false);
           } else {
             place(sheep, depth, 4, 5, () => {
@@ -288,13 +331,16 @@ function buildForestFarmMountainAndCity(
   }
 
   finishSlot(trees);
+  finishSlot(trunks);
+  finishSlot(crowns);
+  if (crowns.mesh.instanceColor) crowns.mesh.instanceColor.needsUpdate = true;
   finishSlot(rocks);
   finishSlot(cows);
   finishSlot(sheep);
   finishSlot(crowd);
   finishSlot(cars);
 
-  group.add(trees.mesh, rocks.mesh, cows.mesh, sheep.mesh, crowd.mesh, cars.mesh);
+  group.add(trees.mesh, trunks.mesh, crowns.mesh, rocks.mesh, cows.mesh, sheep.mesh, crowd.mesh, cars.mesh);
   return group;
 }
 

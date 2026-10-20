@@ -51,6 +51,9 @@ const PADDLE_LIFT = 0.14;
 /** Head turned over the shoulder to look behind while reversing, radians. */
 const REVERSE_HEAD_TURN = 1.25;
 const REVERSE_TORSO_TWIST = 0.45;
+/** The released arm hangs this far straight down from the shoulder, and a little out (the arm is about 0.56 m long). */
+const REVERSE_HANG_DROP = 0.54;
+const REVERSE_HANG_OUT = 0.1;
 /** Torso shift toward the planted foot at a standstill. */
 const IDLE_SWAY = 0.5;
 
@@ -579,6 +582,11 @@ export class RiderModel {
       this.shoulderPoint(this.shoulder, sign);
       if (striking && this.attackKind === "punch") this.punchHand(this.target, this.grips[index]);
       else this.target.copy(this.grips[index]);
+      // Reversing, the arm on the side he is looking over lets go of the bar
+      // and simply hangs from the shoulder.
+      if (sign > 0 && this.reverseAmount > 0 && !(striking && this.attackKind === "punch")) {
+        this.target.lerp(this.a.copy(this.shoulder).add(this.scratch.set(sign * REVERSE_HANG_OUT, -REVERSE_HANG_DROP, 0)), smooth(clamp01(this.reverseAmount)));
+      }
       this.pole.set(sign, -0.5, -0.2);
       this.arms[index].solve(this.shoulder, this.target, this.pole, this.tip);
       if (striking && this.attackKind === "punch") {

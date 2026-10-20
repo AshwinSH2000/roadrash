@@ -76,6 +76,6 @@ console.log("\nreversing (full), one paddle cycle: both feet; the planted foot s
 for (let i = 0; i <= 8; i++) {
   model.setStance(0, 1, 1, (i / 8) * Math.PI * 2, ground, up);
   p = model.jointPositions();
-  console.log(`  ${(i / 8).toFixed(2)}  hips ${f(p.hips)}  head ${f(p.head)}  legL foot ${f(p["legL.end"])}  legR foot ${f(p["legR.end"])}`);
+  console.log(`  ${(i / 8).toFixed(2)}  hips ${f(p.hips)}  head ${f(p.head)}  legL foot ${f(p["legL.end"])}  legR foot ${f(p["legR.end"])}  armL hand ${f(p["armL.end"])}  armR hand ${f(p["armR.end"])}`);
 }
 model.setStance(0, 1, 0, 0, ground, up);

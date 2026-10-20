@@ -915,10 +915,10 @@ const TANK_PAINT_LIMIT = 0.4;
 const TANK_PAINT_DARKNESS = 0.55;
 
 /**
- * Splits the tank out of the body-paint mesh and tags its material
- * (`userData.tankPaint`) so each bike can paint it in its rider's colour. The
- * model merges tank, tail and rails under one material, so the split is by
- * triangle position. Does nothing for a model without that material.
+ * Splits the tank out of the body-paint mesh and tags both halves' materials
+ * (`userData.tankPaint`) so each bike can paint tank and tail in its rider's
+ * colour. The model merges tank, tail and rails under one material, so the
+ * split is by triangle position. Does nothing for a model without that material.
  */
 function splitTankPaint(root: THREE.Object3D): void {
   const targets: THREE.Mesh[] = [];
@@ -965,8 +965,12 @@ function splitTankPaint(root: THREE.Object3D): void {
     tank.scale.copy(mesh.scale);
     mesh.parent?.add(tank);
 
-    if (restTriangles.length > 0) mesh.geometry = subset(restTriangles);
-    else mesh.removeFromParent();
+    if (restTriangles.length > 0) {
+      mesh.geometry = subset(restTriangles);
+      // Tail and rails take the rider colour too.
+      mesh.material = (mesh.material as THREE.Material).clone();
+      mesh.material.userData.tankPaint = true;
+    } else mesh.removeFromParent();
   }
 }
 

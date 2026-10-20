@@ -623,7 +623,7 @@ export class Game {
       raceTime: this.flow.raceElapsed,
       progress: raced / this.track.raceLength,
       standings,
-      nitro: { charge: this.nitro.charge, state: this.nitro.current, turbo: this.nitro.isTurbo },
+      nitro: { charge: this.nitro.charge, state: this.nitro.current },
       combat: combat.kind === null ? null : { kind: combat.kind, phase: combat.phase, cooldown: combat.cooldown },
       recovering: !player.rider.isRiding,
       secondsToDnf:

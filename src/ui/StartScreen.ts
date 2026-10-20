@@ -43,6 +43,13 @@ const TRANSMISSION_DESCRIPTIONS: Record<TransmissionMode, string> = {
   manual: "6 gears, Q/E to shift — redline caps each gear until you upshift",
 };
 
+/**
+ * Manual transmission is built and working (Q/E, T, `?transmission=manual`)
+ * but not offered on this screen for now. Flip this to bring the picker and
+ * its control hints back.
+ */
+const SHOW_TRANSMISSION_PICKER = false;
+
 const CONTROLS: readonly [string, string][] = [
   ["W / ↑", "throttle"],
   ["S / ↓", "brake"],
@@ -50,7 +57,6 @@ const CONTROLS: readonly [string, string][] = [
   ["P", "punch"],
   ["K", "kick"],
   ["N", "nitro"],
-  ["B", "turbo nitro (+60 km/h)"],
   ["Q / E", "shift down/up (manual)"],
   ["T", "manual ⇄ automatic"],
   ["space", "pause"],
@@ -205,7 +211,7 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
       "div",
       `display:flex;flex-wrap:wrap;justify-content:center;gap:6px 22px;font:400 13px/1.5 ${MONO};opacity:0.75;max-width:720px`,
     );
-    const visibleControls = touch
+    const visibleControls = touch || !SHOW_TRANSMISSION_PICKER
       ? CONTROLS.filter(([key]) => key !== "Q / E" && key !== "T")
       : CONTROLS;
     for (const [key, action] of visibleControls) {
@@ -238,7 +244,7 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
     root.append(
       ...(touch
         ? [title, subtitle, qualityBlock, courseBlock, controls, start, hint]
-        : [title, subtitle, qualityBlock, transmissionBlock, courseBlock, controls, start, hint]),
+        : [title, subtitle, qualityBlock, ...(SHOW_TRANSMISSION_PICKER ? [transmissionBlock] : []), courseBlock, controls, start, hint]),
     );
     document.body.appendChild(root);
     start.focus();

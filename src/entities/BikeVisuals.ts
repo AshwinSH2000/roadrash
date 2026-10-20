@@ -1063,6 +1063,72 @@ function splitTankPaint(root: THREE.Object3D): void {
   }
 }
 
+/** Pieces needed before a set of look-alike pieces (spokes, bolts) is taken as turning with the wheel. */
+const MIN_REPEATED_PIECES = 6;
+/** The most a wheel part may stick out along the axle from the hub, as a fraction of the wheel radius. */
+const WHEEL_AXIAL_REACH = 0.6;
+
+/**
+ * Finds the loose pieces of the remaining meshes that belong to a wheel and so
+ * must turn with it: the hub, rings, and the repeated spokes and sprocket
+ * bolts. A piece qualifies only if the whole of it lies inside the wheel disc
+ * (every vertex, not the centroid, so a chain or a mudguard reaching into the
+ * disc never does) and close to the hub along the axle; and then either it
+ * wraps the hub itself, or it is one of at least `MIN_REPEATED_PIECES` pieces
+ * of the same shape whose positions together go all the way round. A lone brake
+ * caliper or an axle nut fails both and stays still, which is the safe way to
+ * be wrong.
+ */
+function claimWheelPieces(
+  remaining: Map<MeshTriangles, Triangle[]>,
+  hubs: HubGeometry,
+  limit: number,
+  longAxis: "x" | "z",
+): { front: Map<MeshTriangles, Triangle[]>; rear: Map<MeshTriangles, Triangle[]> } {
+  const axleAxis = longAxis === "z" ? "x" : "z";
+  const result = { front: new Map<MeshTriangles, Triangle[]>(), rear: new Map<MeshTriangles, Triangle[]>() };
+
+  for (const [which, hub] of [["front", hubs.frontHub], ["rear", hubs.rearHub]] as const) {
+    const candidates: { entry: MeshTriangles; piece: Part }[] = [];
+    for (const [entry, triangles] of remaining) {
+      if (triangles.length === 0) continue;
+      for (const piece of connectedParts(entry, triangles)) {
+        if (piece.triangles.length < 4) continue;
+        const vertices = partVertices(piece);
+        const inside = vertices.every(
+          (v) => radialDistance(v, hub, longAxis) <= limit && Math.abs(v[axleAxis] - hub[axleAxis]) <= hubs.radius * WHEEL_AXIAL_REACH,
+        );
+        if (inside) candidates.push({ entry, piece });
+      }
+    }
+
+    const accepted = new Set<Part>();
+    // 1. Solids of revolution: the hub, sprockets, discs.
+    for (const { piece } of candidates) {
+      if (piece.triangles.length >= MIN_LOBE_TRIANGLES && angularCoverage(piece.triangles, hub, longAxis) >= MIN_ANGULAR_COVERAGE) accepted.add(piece);
+    }
+    // 2. Look-alike pieces spread right round the hub: spokes, bolts.
+    const groups = new Map<string, Part[]>();
+    for (const { entry, piece } of candidates) {
+      const key = `${entry.mesh.uuid}:${piece.triangles.length}`;
+      groups.set(key, [...(groups.get(key) ?? []), piece]);
+    }
+    for (const pieces of groups.values()) {
+      if (pieces.length < MIN_REPEATED_PIECES) continue;
+      const centres = pieces.map((piece) => ({ centroid: piece.box.getCenter(new THREE.Vector3()) }) as Triangle);
+      if (angularCoverage(centres, hub, longAxis) >= MIN_ANGULAR_COVERAGE) pieces.forEach((piece) => accepted.add(piece));
+    }
+
+    for (const { entry, piece } of candidates) {
+      if (!accepted.has(piece)) continue;
+      const list = result[which].get(entry) ?? [];
+      list.push(...piece.triangles);
+      result[which].set(entry, list);
+    }
+  }
+  return result;
+}
+
 /**
  * Separates the wheels — and, when it can, the steering assembly — of a model
  * that has no per-part nodes to detach.
@@ -1138,6 +1204,21 @@ function autoSplitWheels(root: THREE.Object3D, meshes: MeshTriangles[]): Prepare
     if (rest.length) remaining.set(entry, rest);
     splitMeshes.push(entry.mesh.name || "(unnamed)");
     splitTriangles += front.length + rear.length;
+  }
+
+  // Spokes, hubs and sprocket bolts come in meshes that are mostly something
+  // else (this model's chrome mesh is the engine, exhaust and spokes at once),
+  // so the whole-mesh test above leaves them on the frame, standing still in a
+  // turning wheel. Take them as loose pieces instead.
+  const claimed = claimWheelPieces(remaining, hubs, limit, longAxis);
+  for (const [entry, triangles] of claimed.front) frontTriangles.set(entry, [...(frontTriangles.get(entry) ?? []), ...triangles]);
+  for (const [entry, triangles] of claimed.rear) rearTriangles.set(entry, [...(rearTriangles.get(entry) ?? []), ...triangles]);
+  for (const [entry, taken] of [...claimed.front, ...claimed.rear]) {
+    const gone = new Set(taken);
+    remaining.set(entry, (remaining.get(entry) ?? []).filter((t) => !gone.has(t)));
+    splitTriangles += taken.length;
+    const name = entry.mesh.name || "(unnamed)";
+    if (!splitMeshes.includes(name)) splitMeshes.push(name);
   }
 
   if (splitTriangles === 0) return null;

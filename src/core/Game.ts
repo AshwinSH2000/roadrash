@@ -1130,6 +1130,11 @@ export class Game {
     });
     this.animationClock += frameDelta;
     this.builtTrack.animate(this.animationClock);
+    // The traffic light by the start line: red, then amber for the last two seconds, then green.
+    const phaseNow = this.flow.current;
+    this.builtTrack.setStartLight(
+      phaseNow === RacePhase.COUNTDOWN ? (this.flow.countdown > 2 ? "red" : "yellow") : phaseNow === RacePhase.RACING ? "green" : "off",
+    );
     focusSunOn(this.sunLight, this.player.rider.cameraPosition);
     positionSkyDome(this.skyDome, this.camera.position);
     this.syncStrikeVisuals();

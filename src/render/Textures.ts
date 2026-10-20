@@ -282,3 +282,146 @@ export function createCloudTexture(): THREE.CanvasTexture | null {
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
+
+/**
+ * Packed brown earth with stones and the odd tuft — the dirt shoulder between
+ * the asphalt and the grass. Tiles every ~2 m. `null` under Node.
+ */
+export function createDirtTexture(widthMetres: number): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#7a5a3c";
+  ctx.fillRect(0, 0, size, size);
+  speckle(ctx, size, 2600, () => {
+    const v = 70 + Math.floor(Math.random() * 70);
+    return `rgba(${v + 25},${v},${Math.max(0, v - 28)},${(0.25 + Math.random() * 0.35).toFixed(2)})`;
+  }, 0.6, 1.8);
+  // Pebbles and darker ruts.
+  speckle(ctx, size, 90, () => `rgba(${150 + Math.floor(Math.random() * 40)},${130 + Math.floor(Math.random() * 30)},${105 + Math.floor(Math.random() * 25)},0.55)`, 1, 2.6);
+  speckle(ctx, size, 30, () => "rgba(40,28,18,0.35)", 3, 9);
+  return finishTexture(canvas, Math.max(1, widthMetres / 2));
+}
+
+/** Grey concrete paving slabs with joints — the city pavement. Tiles every 2 m. `null` under Node. */
+export function createPavementTexture(widthMetres: number): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#9a9a96";
+  ctx.fillRect(0, 0, size, size);
+  speckle(ctx, size, 1800, () => `rgba(${100 + Math.floor(Math.random() * 60)},${100 + Math.floor(Math.random() * 60)},${96 + Math.floor(Math.random() * 60)},0.35)`, 0.5, 1.4);
+  ctx.strokeStyle = "rgba(60,60,58,0.7)";
+  ctx.lineWidth = 2;
+  for (let i = 0; i <= 2; i++) {
+    ctx.beginPath();
+    ctx.moveTo(0, (i * size) / 2);
+    ctx.lineTo(size, (i * size) / 2);
+    ctx.moveTo((i * size) / 2, 0);
+    ctx.lineTo((i * size) / 2, size);
+    ctx.stroke();
+  }
+  return finishTexture(canvas, Math.max(1, widthMetres / 2));
+}
+
+/**
+ * A building front: one 4 m x 4 m tile, a pale wall (tinted per building) with
+ * two windows, a floor line and a sill. Repeats up and along a facade. Windows
+ * are dark glass with a few lit ones. `null` under Node.
+ */
+export function createFacadeTexture(): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#e6e1d8";
+  ctx.fillRect(0, 0, size, size);
+  speckle(ctx, size, 1500, () => `rgba(${150 + Math.floor(Math.random() * 60)},${140 + Math.floor(Math.random() * 60)},${130 + Math.floor(Math.random() * 60)},0.25)`, 0.6, 1.6);
+  // Floor line at the bottom of the tile.
+  ctx.fillStyle = "rgba(90,84,76,0.65)";
+  ctx.fillRect(0, size - 10, size, 10);
+  // Two windows per tile.
+  for (const cx of [size * 0.27, size * 0.73]) {
+    const w = size * 0.28;
+    const h = size * 0.5;
+    const x = cx - w / 2;
+    const y = size * 0.2;
+    ctx.fillStyle = "rgba(60,56,52,0.9)";
+    ctx.fillRect(x - 5, y - 5, w + 10, h + 10);
+    const lit = Math.random() < 0.3;
+    const glass = ctx.createLinearGradient(0, y, 0, y + h);
+    glass.addColorStop(0, lit ? "#f2d98a" : "#6f8aa3");
+    glass.addColorStop(1, lit ? "#d9b45c" : "#2d3f52");
+    ctx.fillStyle = glass;
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = "rgba(60,56,52,0.9)";
+    ctx.fillRect(x + w / 2 - 2, y, 4, h);
+    ctx.fillRect(x, y + h * 0.35 - 2, w, 4);
+    // Sill.
+    ctx.fillStyle = "rgba(200,194,184,1)";
+    ctx.fillRect(x - 9, y + h + 5, w + 18, 7);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+export type SignKind = "arrow-left" | "arrow-right" | "diamond-left" | "diamond-right";
+
+/**
+ * A roadside curve sign: a white board with a bold bend arrow, or a yellow
+ * diamond with the same, pointing the way the road turns. `null` under Node.
+ */
+export function createSignTexture(kind: SignKind): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const size = 128;
+  const { canvas, ctx } = makeCanvas(size);
+  const left = kind.endsWith("left");
+  const diamond = kind.startsWith("diamond");
+  ctx.clearRect(0, 0, size, size);
+
+  if (diamond) {
+    ctx.fillStyle = "#f2b61c";
+    ctx.beginPath();
+    ctx.moveTo(size / 2, 4);
+    ctx.lineTo(size - 4, size / 2);
+    ctx.lineTo(size / 2, size - 4);
+    ctx.lineTo(4, size / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "#1a1a1a";
+    ctx.lineWidth = 4;
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = "#f4f2e8";
+    ctx.fillRect(4, 4, size - 8, size - 8);
+    ctx.strokeStyle = "#1a1a1a";
+    ctx.lineWidth = 5;
+    ctx.strokeRect(4, 4, size - 8, size - 8);
+  }
+
+  // A bend arrow: up the board, curving over to the side the road turns, ending in an arrowhead.
+  const dir = left ? -1 : 1;
+  ctx.strokeStyle = "#111";
+  ctx.fillStyle = "#111";
+  ctx.lineWidth = 11;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(size / 2 - dir * 10, size * (diamond ? 0.72 : 0.8));
+  ctx.lineTo(size / 2 - dir * 10, size * 0.5);
+  ctx.quadraticCurveTo(size / 2 - dir * 10, size * 0.3, size / 2 + dir * 18, size * 0.3);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(size / 2 + dir * 38, size * 0.3);
+  ctx.lineTo(size / 2 + dir * 12, size * 0.3 - 17);
+  ctx.lineTo(size / 2 + dir * 12, size * 0.3 + 17);
+  ctx.closePath();
+  ctx.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}

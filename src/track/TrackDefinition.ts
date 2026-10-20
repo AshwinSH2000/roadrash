@@ -26,6 +26,13 @@ export interface SceneryZone {
 export const ROAD_HALF_WIDTH = 7;
 /** Half-width of the low-grip terrain flanking the road, in metres. */
 export const OFFROAD_HALF_WIDTH = 30;
+/**
+ * Half-width of the playable ground where the course runs through a town: the
+ * invisible wall stands here instead of at the off-road edge, so the street
+ * is a street (road, pavement, a strip of onlookers) and the buildings can
+ * stand right behind it without a rider being able to ride into them.
+ */
+export const CITY_HALF_WIDTH = 12.5;
 
 /**
  * Hand-authored centerline, laid out as a sequence of straights and constant-

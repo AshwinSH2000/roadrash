@@ -2,17 +2,20 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { PhysicsWorld } from "../physics/PhysicsWorld";
 import { OFFROAD_SURFACE, ROAD_SURFACE, SAND_SURFACE, SurfaceRegistry, WATER_SURFACE } from "../physics/TerrainMaterial";
-import { OFFROAD_HALF_WIDTH, ROAD_HALF_WIDTH, TrackDefinition } from "./TrackDefinition";
+import { CITY_HALF_WIDTH, OFFROAD_HALF_WIDTH, ROAD_HALF_WIDTH, TrackDefinition } from "./TrackDefinition";
 import { GROUPS_FINISH_SENSOR, GROUPS_TERRAIN } from "../physics/CollisionGroups";
 import {
   createAsphaltTexture,
   createCliffTexture,
+  createDirtTexture,
   createGrassTexture,
+  createPavementTexture,
   createSandTexture,
   createWaterTexture,
 } from "../render/Textures";
 import { LoopGeometry, type TrackFeature } from "./TrackFeatures";
 import { buildBoundaryWalls } from "./Boundary";
+import { buildCurveSigns, buildStartLight, type StartLightState } from "./Roadside";
 
 /**
  * Turns a `TrackDefinition` spline into actual geometry: a road ribbon and
@@ -35,6 +38,11 @@ const SAND_FALLBACK_COLOR = 0xd8bf86;
 const MARKING_LIFT = 0.02;
 /** The outer edge of the off-road band drops away, so terrain reads as falling off rather than as a flat carpet. */
 const OFFROAD_OUTER_DROP = -2.5;
+const YELLOW_LINE_COLOR = 0xe8b923;
+/** Width of the dirt shoulder along the edge of the asphalt, away from towns. */
+const SHOULDER_WIDTH = 2.4;
+/** Width of the kerb, and then the pavement, along the edge of the asphalt in towns. */
+const KERB_WIDTH = 0.35;
 
 interface BandSpec {
   /** Signed lateral offsets from the centerline, in metres (negative = track-left). */
@@ -58,6 +66,8 @@ interface BandGeometry {
 export interface BuiltTrack {
   /** Per-frame animation of the scenery that moves (the river). `seconds` is any steadily increasing clock. */
   animate: (seconds: number) => void;
+  /** Sets the traffic light by the start line. */
+  setStartLight: (state: StartLightState) => void;
   group: THREE.Group;
   roadCollider: RAPIER.Collider;
   offroadColliders: RAPIER.Collider[];
@@ -467,16 +477,86 @@ export function buildTrack(
     );
   }
 
-  // Dashed centre line: samples are ~3m apart, so 2 on / 3 off gives roughly
-  // a 6m dash with a 9m gap.
-  const centreLine = buildBand(track, {
-    innerLateral: -0.15,
-    outerLateral: 0.15,
-    innerLift: MARKING_LIFT,
-    outerLift: MARKING_LIFT,
-    segmentFilter: (seg) => seg % 5 < 2 && !track.segmentInFeature(seg),
-  });
-  group.add(markAsBand(new THREE.Mesh(centreLine.geometry, markingMaterial), "centre-line"));
+  // Centre: a solid double yellow line, as on any two-way road, and white dashed lane lines
+  // a quarter of the way in from each edge. Dashes: samples are ~3 m apart, so 2 on / 3 off
+  // gives roughly a 6 m dash with a 9 m gap.
+  const yellowMaterial = new THREE.MeshStandardMaterial({ color: YELLOW_LINE_COLOR, roughness: 0.8 });
+  for (const side of [-1, 1] as const) {
+    const yellow = buildBand(track, {
+      innerLateral: side * 0.12,
+      outerLateral: side * 0.32,
+      innerLift: MARKING_LIFT,
+      outerLift: MARKING_LIFT,
+      segmentFilter: (seg) => !track.segmentInFeature(seg),
+    });
+    group.add(markAsBand(new THREE.Mesh(yellow.geometry, yellowMaterial), `centre-line-${side < 0 ? "left" : "right"}`));
+  }
+  for (const side of [-1, 1] as const) {
+    const lane = buildBand(track, {
+      innerLateral: side * (ROAD_HALF_WIDTH / 2 - 0.1),
+      outerLateral: side * (ROAD_HALF_WIDTH / 2 + 0.1),
+      innerLift: MARKING_LIFT,
+      outerLift: MARKING_LIFT,
+      segmentFilter: (seg) => seg % 5 < 2 && !track.segmentInFeature(seg),
+    });
+    group.add(markAsBand(new THREE.Mesh(lane.geometry, markingMaterial), `lane-line-${side < 0 ? "left" : "right"}`));
+  }
+
+  // --- Shoulder, kerb and pavement ---------------------------------------
+  // Visual strips laid on the off-road band along the asphalt's edge, following its slope:
+  // packed dirt in the country, a kerb and paving in towns. The grip underneath is the
+  // off-road band's, as before; this is only what it looks like.
+  const stripSegment = (city: boolean) => (seg: number): boolean =>
+    !track.segmentInFeature(seg, "river", true) &&
+    !track.segmentInFeature(seg, "loop", true) &&
+    (track.biomeAt(track.sampleDistances[seg]) === "city") === city;
+  const slope = (lateral: number): number => OFFROAD_OUTER_DROP * ((lateral - ROAD_HALF_WIDTH) / (OFFROAD_HALF_WIDTH - ROAD_HALF_WIDTH));
+  const dirtTexture = createDirtTexture(SHOULDER_WIDTH);
+  const dirtMaterial = terrainMaterial(dirtTexture, 0x7a5a3c, 1.0);
+  const pavementWidth = CITY_HALF_WIDTH - ROAD_HALF_WIDTH - KERB_WIDTH;
+  const pavementMaterial = terrainMaterial(createPavementTexture(pavementWidth), 0x9a9a96, 0.95);
+  const kerbMaterial = new THREE.MeshStandardMaterial({ color: 0xc9c7c0, roughness: 0.9 });
+  for (const side of [-1, 1] as const) {
+    const name = side < 0 ? "left" : "right";
+    const dirt = buildBand(track, {
+      innerLateral: side * ROAD_HALF_WIDTH,
+      outerLateral: side * (ROAD_HALF_WIDTH + SHOULDER_WIDTH),
+      innerLift: 0.03,
+      outerLift: slope(ROAD_HALF_WIDTH + SHOULDER_WIDTH) + 0.03,
+      uvRepeatLength: 2,
+      segmentFilter: stripSegment(false),
+    });
+    const dirtMesh = new THREE.Mesh(dirt.geometry, dirtMaterial);
+    dirtMesh.receiveShadow = true;
+    group.add(markAsBand(dirtMesh, `shoulder-${name}`));
+
+    const kerb = buildBand(track, {
+      innerLateral: side * ROAD_HALF_WIDTH,
+      outerLateral: side * (ROAD_HALF_WIDTH + KERB_WIDTH),
+      innerLift: 0.05,
+      outerLift: slope(ROAD_HALF_WIDTH + KERB_WIDTH) + 0.05,
+      uvRepeatLength: 2,
+      segmentFilter: stripSegment(true),
+    });
+    group.add(markAsBand(new THREE.Mesh(kerb.geometry, kerbMaterial), `kerb-${name}`));
+    const pavement = buildBand(track, {
+      innerLateral: side * (ROAD_HALF_WIDTH + KERB_WIDTH),
+      outerLateral: side * CITY_HALF_WIDTH,
+      innerLift: 0.04,
+      outerLift: slope(CITY_HALF_WIDTH) + 0.04,
+      uvRepeatLength: 2,
+      segmentFilter: stripSegment(true),
+    });
+    const pavementMesh = new THREE.Mesh(pavement.geometry, pavementMaterial);
+    pavementMesh.receiveShadow = true;
+    group.add(markAsBand(pavementMesh, `pavement-${name}`));
+  }
+
+  // --- Roadside: curve signs and the start light ----------------------------
+  const roadsideDisposers: Array<() => void> = [];
+  group.add(buildCurveSigns(track, roadsideDisposers));
+  const startLight = buildStartLight(track, roadsideDisposers);
+  group.add(startLight.group);
 
   // --- Start and finish line markings ------------------------------------
   group.add(buildLineMarker(track, track.startDistance, 0x2f6fd0));
@@ -516,6 +596,7 @@ export function buildTrack(
     offroadColliders,
     finishSensor,
     animate: (seconds) => animators.forEach((animate) => animate(seconds)),
+    setStartLight: (state) => startLight.set(state),
   };
 }
 

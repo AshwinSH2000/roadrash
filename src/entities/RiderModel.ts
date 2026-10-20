@@ -451,12 +451,31 @@ export interface RagdollPartSpec {
  */
 export class RagdollVisuals {
   private readonly materials: RiderMaterials;
+  /**
+   * The skinned rider, when `rider.glb` is loaded: it follows the ragdoll's bodies (see
+   * `RiderCharacter.poseFromBodies`) and the capsule-and-box parts below are not made. Added to
+   * the scene by whoever owns the ragdoll.
+   */
+  readonly figure: RiderCharacter | null;
 
   constructor(color: number) {
     this.materials = createMaterials(color);
+    this.figure = createRiderCharacter(color);
+    if (this.figure) {
+      // The same full-face helmet as the seated rider wears, on the head bone.
+      const mount = new THREE.Group();
+      mount.scale.setScalar(1 / this.figure.localUnit);
+      this.figure.head.add(mount);
+      const helmet = buildFullFaceHelmet(this.materials);
+      helmet.position.set(0, 0.1, 0.01);
+      mount.add(helmet);
+      this.figure.setVisible(false);
+    }
   }
 
   create(spec: RagdollPartSpec): THREE.Object3D {
+    // The skinned figure is the body; the physics bodies still need something to move, but nothing to draw.
+    if (this.figure) return new THREE.Group();
     const m = this.materials;
     const part = new THREE.Group();
     /** A shape of the given size, `y` up the bone. `flip` turns it end for end, so a limb's thin end points away from the body. */
@@ -508,6 +527,7 @@ export class RagdollVisuals {
   }
 
   dispose(): void {
+    this.figure?.dispose();
     // Box and sphere geometry are shared module-wide; only materials are owned.
     for (const material of this.materials.all) material.dispose();
   }

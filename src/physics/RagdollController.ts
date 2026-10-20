@@ -233,6 +233,7 @@ export class RagdollController {
   private aliveFor = 0;
 
   private readonly tmpVec = new THREE.Vector3();
+  private readonly renderedPose = new Map<string, { position: THREE.Vector3; quaternion: THREE.Quaternion }>();
   private readonly tmpParent = new THREE.Quaternion();
   private readonly tmpChild = new THREE.Quaternion();
   private readonly tmpRel = new THREE.Quaternion();
@@ -469,7 +470,16 @@ export class RagdollController {
     for (const bone of this.bones) {
       bone.mesh.position.lerpVectors(bone.prevPos, bone.currPos, alpha);
       bone.mesh.quaternion.slerpQuaternions(bone.prevQuat, bone.currQuat, alpha);
+      let entry = this.renderedPose.get(bone.spec.name);
+      if (!entry) this.renderedPose.set(bone.spec.name, (entry = { position: new THREE.Vector3(), quaternion: new THREE.Quaternion() }));
+      entry.position.copy(bone.mesh.position);
+      entry.quaternion.copy(bone.mesh.quaternion);
     }
+  }
+
+  /** Where a body is drawn this frame (after `syncRender`), for a skinned figure to follow. */
+  bodyPose(name: string): { position: THREE.Vector3; quaternion: THREE.Quaternion } | undefined {
+    return this.isActive ? this.renderedPose.get(name) : undefined;
   }
 
   despawn(): void {

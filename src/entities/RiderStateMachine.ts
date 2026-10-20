@@ -5,6 +5,7 @@ import { RagdollController } from "../physics/RagdollController";
 import { GROUPS_RIDER, GROUPS_WHEEL_RAY } from "../physics/CollisionGroups";
 import { LOCAL_FORWARD, LOCAL_UP, WORLD_UP } from "../utils/Directions";
 import type { Bike } from "./Bike";
+import type { RiderCharacter } from "./RiderCharacter";
 import {
   HIP,
   RagdollVisuals,
@@ -78,6 +79,7 @@ export class RiderStateMachine {
   private timer = 0;
 
   private readonly ragdoll: RagdollController;
+  private readonly ragdollFigure: RiderCharacter | null;
   private runnerBody: RAPIER.RigidBody | null = null;
   /** The on-foot figure: the same jointed rider, posed standing, getting up or running. */
   private readonly runner: RiderModel;
@@ -120,7 +122,11 @@ export class RiderStateMachine {
     this.model = new RiderModel(color);
     this.bike.addRiderObject(this.model.object);
     this.bike.attachRiderHands(this.model);
-    this.ragdoll = new RagdollController(physics, scene, color, new RagdollVisuals(color));
+    const ragdollVisuals = new RagdollVisuals(color);
+    this.ragdoll = new RagdollController(physics, scene, color, ragdollVisuals);
+    // The skinned figure that wears the tumble, when there is one; shown only while the ragdoll is live.
+    this.ragdollFigure = ragdollVisuals.figure;
+    if (this.ragdollFigure) scene.add(this.ragdollFigure.holder);
 
     this.runner = new RiderModel(color);
     this.runner.setVisible(false);
@@ -421,6 +427,10 @@ export class RiderStateMachine {
 
   syncRender(alpha: number): void {
     this.ragdoll.syncRender(alpha);
+    if (this.ragdollFigure) {
+      this.ragdollFigure.setVisible(this.ragdoll.isActive);
+      if (this.ragdoll.isActive) this.ragdollFigure.poseFromBodies((name) => this.ragdoll.bodyPose(name));
+    }
     if (this.runnerBody && this.runner.object.visible) {
       // The model's origin is on the ground under the hips, not at the capsule centre.
       this.runner.object.position.lerpVectors(this.runnerPrevPos, this.runnerCurrPos, alpha);

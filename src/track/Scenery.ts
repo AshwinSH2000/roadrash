@@ -2,7 +2,7 @@ import * as THREE from "three";
 import type { TrackDefinition } from "./TrackDefinition";
 import { CITY_HALF_WIDTH, OFFROAD_HALF_WIDTH } from "./TrackDefinition";
 import type { GraphicsSettings } from "../settings/GraphicsSettings";
-import { createFacadeTexture } from "../render/Textures";
+import { buildCity } from "./City";
 
 /**
  * Roadside scenery — low-poly props scattered past the off-road band, so the
@@ -38,6 +38,8 @@ const SAMPLE_STRIDE = 5;
 const BACKGROUND_STRIDE = 20;
 /** Roughly how far the off-road terrain's outer edge drops, visually — see `TrackBuilder`'s `OFFROAD_OUTER_DROP`. */
 const GROUND_DROP = -2.5;
+/** The foot of a backdrop mountain stays at least this far from any road, in metres. */
+const PEAK_ROAD_CLEARANCE = 200;
 
 export interface Scenery {
   group: THREE.Group;
@@ -50,7 +52,7 @@ function slotCount(track: TrackDefinition, stride: number): number {
 }
 
 /** Builds the scattered scenery for one track, at a density set by the quality preset. */
-export function buildScenery(track: TrackDefinition, quality: GraphicsSettings): Scenery {
+export function buildScenery(track: TrackDefinition, quality: GraphicsSettings, ground?: GroundHeight): Scenery {
   const group = new THREE.Group();
   group.name = "scenery";
   const disposers: Array<() => void> = [];
@@ -59,9 +61,9 @@ export function buildScenery(track: TrackDefinition, quality: GraphicsSettings):
     return { group, dispose: () => {} };
   }
 
-  group.add(buildForestFarmMountainAndCity(track, quality, disposers));
-  group.add(buildBackgroundProps(track, quality, disposers));
-  group.add(buildCityStreet(track, quality, disposers));
+  group.add(buildForestFarmMountainAndCity(track, quality, disposers, ground));
+  group.add(buildBackgroundProps(track, quality, disposers, ground));
+  group.add(buildCity(track, quality, disposers));
   group.add(buildMountainBackdrop(track, quality, disposers));
 
   return {
@@ -70,6 +72,14 @@ export function buildScenery(track: TrackDefinition, quality: GraphicsSettings):
       for (const dispose of disposers) dispose();
     },
   };
+}
+
+/** Height of the terrain at a world position, when there are hills for props to stand on. */
+export type GroundHeight = (x: number, z: number) => number;
+
+/** Where a prop at `position` (beside the road sample `center`) stands: on the hills if there are any, else at the off-road band's drop. */
+function standingHeight(center: THREE.Vector3, position: THREE.Vector3, ground?: GroundHeight): number {
+  return ground ? ground(position.x, position.z) : center.y + GROUND_DROP;
 }
 
 /** A prop type: one instanced mesh plus the running count of instances actually placed into it. */
@@ -112,6 +122,7 @@ function buildForestFarmMountainAndCity(
   track: TrackDefinition,
   quality: GraphicsSettings,
   disposers: Array<() => void>,
+  ground?: GroundHeight,
 ): THREE.Group {
   const group = new THREE.Group();
   const capacity = slotCount(track, SAMPLE_STRIDE);
@@ -230,7 +241,7 @@ function buildForestFarmMountainAndCity(
         const lateral = side * depth + (Math.random() - 0.5) * lateralJitter;
         const along = (Math.random() - 0.5) * alongJitter;
         position.copy(center).addScaledVector(right, lateral).addScaledVector(tangent, along);
-        position.y = center.y + GROUND_DROP;
+        position.y = standingHeight(center, position, ground);
         sizeFn();
         matrix.compose(position, faceRoad ? alignedQuaternion : quaternion, scale);
         slot.mesh.setMatrixAt(slot.count++, matrix);
@@ -243,7 +254,7 @@ function buildForestFarmMountainAndCity(
         const lateral = side * depth + (Math.random() - 0.5) * 3;
         const along = (Math.random() - 0.5) * 4;
         position.copy(center).addScaledVector(right, lateral).addScaledVector(tangent, along);
-        position.y = center.y + GROUND_DROP;
+        position.y = standingHeight(center, position, ground);
         const height = 3.6 + Math.random() * 2.6;
         const trunkHeight = height * 0.45;
         const radius = 1.3 + Math.random() * 1.0;
@@ -355,6 +366,7 @@ function buildBackgroundProps(
   track: TrackDefinition,
   quality: GraphicsSettings,
   disposers: Array<() => void>,
+  ground?: GroundHeight,
 ): THREE.Group {
   const group = new THREE.Group();
   const capacity = slotCount(track, BACKGROUND_STRIDE);
@@ -389,7 +401,7 @@ function buildBackgroundProps(
       if (Math.random() > 0.35) continue; // barns are sparse
       const depth = OFFROAD_HALF_WIDTH + 18 + Math.random() * 20;
       position.copy(center).addScaledVector(right, side * depth);
-      position.y = center.y + GROUND_DROP;
+      position.y = standingHeight(center, position, ground);
       const width = 3.5 + Math.random() * 1.5;
       const height = 4 + Math.random() * 2;
       scale.set(width, height, width * 1.4);
@@ -437,28 +449,38 @@ function buildMountainBackdrop(
   const centerZ = (minZ + maxZ) / 2;
   const radius = Math.max(maxX - minX, maxZ - minZ) / 2 + 700;
 
-  const peakGeometry = new THREE.ConeGeometry(1, 1, 4);
-  peakGeometry.translate(0, 0.5, 0);
-  const peakMaterial = new THREE.MeshStandardMaterial({
-    color: 0x6b7a8f,
-    roughness: 1.0,
-    fog: true,
-  });
+  // A few different mountains, each a ridged cone with soft shoulders, coloured from forested foot through bare rock
+  // to a snowy top, all in vertex colours: no textures, a couple of hundred triangles apiece.
+  const mountainMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, fog: true });
+  const variants = [0, 1, 2, 3].map((n) => makeMountainGeometry(7 + n * 13));
   disposers.push(() => {
-    peakGeometry.dispose();
-    peakMaterial.dispose();
+    variants.forEach((g) => g.dispose());
+    mountainMaterial.dispose();
   });
-
   const peakCount = Math.max(24, Math.round(48 * Math.max(0.3, quality.sceneryDensity)));
-  const peaks = new THREE.InstancedMesh(peakGeometry, peakMaterial, peakCount);
-  peaks.name = "scenery-mountain-backdrop";
-  peaks.receiveShadow = false;
-  peaks.castShadow = false;
+  const peaks = variants.map((geometry, n) => {
+    const mesh = new THREE.InstancedMesh(geometry, mountainMaterial, peakCount);
+    mesh.name = `scenery-mountain-backdrop-${n}`;
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    mesh.count = 0;
+    return mesh;
+  });
 
   const matrix = new THREE.Matrix4();
   const position = new THREE.Vector3();
   const quaternion = new THREE.Quaternion();
   const scale = new THREE.Vector3();
+
+  /** Distance from `p`, on the ground plane, to the nearest stretch of road. */
+  const nearestRoad = (p: THREE.Vector3): number => {
+    let best = Infinity;
+    for (let i = 0; i < track.samplePoints.length; i += 3) {
+      const q = track.samplePoints[i];
+      best = Math.min(best, (q.x - p.x) ** 2 + (q.z - p.z) ** 2);
+    }
+    return Math.sqrt(best);
+  };
 
   // A peak dead ahead of the finish line would sit on top of the road from
   // the rider's view; keep a clear sector in the finish direction.
@@ -470,151 +492,106 @@ function buildMountainBackdrop(
     finishPoint.x + finishHeading.x * radius - centerX,
   );
 
-  let placed = 0;
   for (let i = 0; i < peakCount; i++) {
     const angle = (i / peakCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.15;
     let off = Math.abs(angle - clearAngle) % (Math.PI * 2);
     if (off > Math.PI) off = Math.PI * 2 - off;
     if (off < PEAK_FINISH_CLEARANCE) continue;
-    const r = radius * (0.9 + Math.random() * 0.3);
-    position.set(centerX + Math.cos(angle) * r, lowestY - 20, centerZ + Math.sin(angle) * r);
+    let r = radius * (0.9 + Math.random() * 0.3);
+    // Broad and not too steep: a range, not a row of spikes.
+    let width = 380 + Math.random() * 380;
+    const height = 130 + Math.random() * 220;
+    // A mountain's foot is as wide as the mountain, so on a compact course a broad one could stand right over the
+    // road. Push it outward until its foot stands clear of every road, and narrow it if that is not enough.
+    const at = (distance: number): void => {
+      position.set(centerX + Math.cos(angle) * distance, lowestY - 20, centerZ + Math.sin(angle) * distance);
+    };
+    at(r);
+    for (let step = 0; step < 40 && nearestRoad(position) < width + PEAK_ROAD_CLEARANCE; step++) {
+      r += 100;
+      at(r);
+    }
+    width = Math.max(150, Math.min(width, nearestRoad(position) - PEAK_ROAD_CLEARANCE));
     quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI * 2);
-    const width = 250 + Math.random() * 300;
-    const height = 180 + Math.random() * 260;
     scale.set(width, height, width);
     matrix.compose(position, quaternion, scale);
-    peaks.setMatrixAt(placed++, matrix);
+    const mesh = peaks[Math.floor(Math.random() * peaks.length)];
+    mesh.setMatrixAt(mesh.count++, matrix);
   }
-  peaks.count = placed;
-  peaks.instanceMatrix.needsUpdate = true;
-  group.add(peaks);
+  for (const mesh of peaks) {
+    mesh.instanceMatrix.needsUpdate = true;
+    group.add(mesh);
+  }
 
   return group;
-}
-
-/** Where the buildings' fronts stand, measured out from the centreline: just behind the onlookers and parked cars. */
-const BUILDING_FRONT = CITY_HALF_WIDTH + 5.5;
-const BUILDING_DEPTH = 14;
-const BUILDING_WIDTHS = [9, 13] as const;
-const BUILDING_HEIGHTS = [12, 19, 28] as const;
-/** Metres of wall one repeat of the facade texture covers. */
-const FACADE_TILE = 4;
-/** How far the foundations reach below the street, so a building never stands on air where the ground falls away. */
-const FOUNDATION = 3;
-const FACADE_TINTS = [0xf0e6d6, 0xc98a6a, 0xd9c19a, 0xbfc3c7, 0xe3c07a, 0xa9b4bd];
-
-/** A box whose side faces carry the facade texture at a fixed scale (windows the same size on every building), roof and floor plain. */
-function facadeBox(width: number, height: number, depth: number): THREE.BufferGeometry {
-  const geometry = new THREE.BoxGeometry(width, height + FOUNDATION, depth);
-  geometry.translate(0, (height - FOUNDATION) / 2, 0);
-  const uv = geometry.getAttribute("uv");
-  // BoxGeometry orders its faces +x, -x, +y, -y, +z, -z, four vertices each.
-  const faceWidths = [depth, depth, 1, 1, width, width];
-  for (let face = 0; face < 6; face++) {
-    for (let k = 0; k < 4; k++) {
-      const n = face * 4 + k;
-      if (face === 2 || face === 3) uv.setXY(n, 0.02, 0.02);
-      else uv.setXY(n, (uv.getX(n) * faceWidths[face]) / FACADE_TILE, (uv.getY(n) * (height + FOUNDATION)) / FACADE_TILE);
-    }
-  }
-  return geometry;
 }
 
 /**
- * The town: unbroken rows of windowed buildings on both sides of the street,
- * set back behind the pavement, the onlookers and the parked cars, as a city
- * street looks from the saddle. Buildings are placed end to end along the
- * course wherever it is in a town, in a few widths and heights, each tinted
- * its own colour; where the road bends tightly the inside row is left open
- * rather than letting buildings pile into each other. Behind the front row a
- * sparse second row of taller blocks shows between the gaps.
+ * One mountain, unit size (radius 1, height 1, base on y = 0): rings of vertices from a broken, ridged summit down to a
+ * wide foot, pushed in and out by noise along the ridges so the slopes have spurs and gullies, and coloured by height
+ * and slope: forest-grey foot, bare rock, then snow above a wobbling snowline, whiter on the flatter faces.
  */
-function buildCityStreet(
-  track: TrackDefinition,
-  quality: GraphicsSettings,
-  disposers: Array<() => void>,
-): THREE.Group {
-  const group = new THREE.Group();
-  group.name = "city-street";
+function makeMountainGeometry(seed: number): THREE.BufferGeometry {
+  const around = 18;
+  const rings = 9;
+  const rand = (n: number): number => {
+    const x = Math.sin(n * 127.1 + seed * 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  const smooth = (a: number, b: number, x: number): number => {
+    const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+  // A little ridge noise round the mountain: spurs at a few angles, not a regular star.
+  const spur = (angle: number, ring: number): number => {
+    const a = (angle / (Math.PI * 2)) * around;
+    const i = Math.floor(a);
+    const f = a - i;
+    const u = f * f * (3 - 2 * f);
+    const k = (j: number): number => rand(((j + around) % around) + ring * 31);
+    return k(i) + (k(i + 1) - k(i)) * u;
+  };
 
-  interface Placement { variant: number; position: THREE.Vector3; facing: THREE.Vector3; tint: number }
-  const placements: Placement[] = [];
-  const variantOf = (w: number, h: number): number => BUILDING_WIDTHS.indexOf(w as 9 | 13) * BUILDING_HEIGHTS.length + BUILDING_HEIGHTS.indexOf(h as 12 | 19 | 28);
-  const fill = Math.min(1, 0.55 + quality.sceneryDensity * 0.5);
-  const slope = (lateral: number): number => GROUND_DROP * ((lateral - 7) / (OFFROAD_HALF_WIDTH - 7));
-  const right = new THREE.Vector3();
-  const facing = new THREE.Vector3();
-
-  for (const side of [-1, 1] as const) {
-    let distance = 0;
-    while (distance < track.totalLength) {
-      const width = BUILDING_WIDTHS[Math.floor(Math.random() * BUILDING_WIDTHS.length)];
-      const index = track.sampleIndexAt(distance + width / 2);
-      if (track.biomeAt(distance + width / 2) !== "city" || track.segmentInFeature(index, undefined, true)) {
-        distance += 12;
-        continue;
-      }
-      const advance = width + 0.6 + Math.random() * 1.2;
-      const height = BUILDING_HEIGHTS[Math.floor(Math.random() * BUILDING_HEIGHTS.length)];
-      // Which side of the road is the inside of the bend here?
-      right.copy(track.sampleRights[index]);
-      const behind = track.sampleTangents[Math.max(0, index - 6)];
-      const ahead = track.sampleTangents[Math.min(track.sampleTangents.length - 1, index + 6)];
-      const innerSide = ahead.clone().sub(behind).dot(right) > 0 ? 1 : -1;
-      const lateral = BUILDING_FRONT + BUILDING_DEPTH / 2;
-      const crowded = side === innerSide && track.sampleRadii[index] < (lateral + BUILDING_DEPTH / 2 + 4) * 1.1;
-      if (!crowded && Math.random() < fill) {
-        const position = track.samplePoints[index].clone().addScaledVector(right, side * lateral);
-        position.y += slope(BUILDING_FRONT);
-        facing.copy(right).multiplyScalar(-side).setY(0).normalize();
-        const tint = FACADE_TINTS[Math.floor(Math.random() * FACADE_TINTS.length)];
-        placements.push({ variant: variantOf(width, height), position, facing: facing.clone(), tint });
-        // A taller block behind the gap, now and then.
-        if (Math.random() < 0.18) {
-          const back = position.clone().addScaledVector(right, side * (BUILDING_DEPTH + 10 + Math.random() * 8));
-          placements.push({ variant: variantOf(13, 28), position: back, facing: facing.clone(), tint: FACADE_TINTS[Math.floor(Math.random() * FACADE_TINTS.length)] });
-        }
-      }
-      distance += advance;
+  const positions: number[] = [0, 1, 0];
+  const colours: number[] = [];
+  const colour = new THREE.Color();
+  const paint = (y: number, flat: number, n: number): void => {
+    const foot = new THREE.Color(0.31, 0.4, 0.33);
+    const rock = new THREE.Color(0.47, 0.48, 0.52);
+    const snow = new THREE.Color(0.96, 0.97, 0.99);
+    colour.copy(foot).lerp(rock, smooth(0.12, 0.5, y + n * 0.12));
+    const snowline = 0.62 - flat * 0.1 + (n - 0.5) * 0.18;
+    colour.lerp(snow, smooth(snowline, snowline + 0.14, y));
+    colours.push(colour.r, colour.g, colour.b);
+  };
+  paint(1, 0.5, 0.5);
+  for (let r = 1; r <= rings; r++) {
+    const t = r / rings; // 0 at the summit, 1 at the foot
+    for (let a = 0; a < around; a++) {
+      const angle = (a / around) * Math.PI * 2;
+      const n = spur(angle, r);
+      // Slopes are steep high up and ease out toward the foot; the spurs push the outline in and out.
+      const radius = Math.pow(t, 0.85) * (0.82 + 0.36 * n) + (r === rings ? 0.08 : 0);
+      const y = Math.pow(1 - t, 1.25) * (0.9 + 0.2 * rand(a + r * 7));
+      positions.push(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
+      paint(y, t, n);
     }
   }
-  if (placements.length === 0) return group;
-
-  const facade = createFacadeTexture();
-  const wall = new THREE.MeshStandardMaterial({ map: facade, color: 0xffffff, roughness: 0.9 });
-  const roof = new THREE.MeshStandardMaterial({ color: 0x5c5a57, roughness: 1 });
-  disposers.push(() => {
-    wall.dispose();
-    roof.dispose();
-    facade?.dispose();
-  });
-  const materials = [wall, wall, roof, roof, wall, wall];
-
-  const variants: THREE.InstancedMesh[] = [];
-  BUILDING_WIDTHS.forEach((w) => BUILDING_HEIGHTS.forEach((h) => {
-    const list = placements.filter((p) => p.variant === variantOf(w, h));
-    if (list.length === 0) return;
-    const geometry = facadeBox(w, h, BUILDING_DEPTH);
-    disposers.push(() => geometry.dispose());
-    const mesh = new THREE.InstancedMesh(geometry, materials, list.length);
-    mesh.name = `city-buildings-${w}x${h}`;
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    const matrix = new THREE.Matrix4();
-    const quaternion = new THREE.Quaternion();
-    const unit = new THREE.Vector3(1, 1, 1);
-    const colour = new THREE.Color();
-    list.forEach((p, n) => {
-      // The front (+Z) faces the street.
-      quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), p.facing);
-      matrix.compose(p.position, quaternion, unit);
-      mesh.setMatrixAt(n, matrix);
-      mesh.setColorAt(n, colour.setHex(p.tint));
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    variants.push(mesh);
-  }));
-  group.add(...variants);
-  return group;
+  const indices: number[] = [];
+  for (let a = 0; a < around; a++) indices.push(0, 1 + ((a + 1) % around), 1 + a);
+  for (let r = 1; r < rings; r++) {
+    for (let a = 0; a < around; a++) {
+      const i0 = 1 + (r - 1) * around + a;
+      const i1 = 1 + (r - 1) * around + ((a + 1) % around);
+      const j0 = 1 + r * around + a;
+      const j1 = 1 + r * around + ((a + 1) % around);
+      indices.push(i0, i1, j0, i1, j1, j0);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colours, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
 }

@@ -324,41 +324,81 @@ export function createPavementTexture(widthMetres: number): THREE.CanvasTexture 
   return finishTexture(canvas, Math.max(1, widthMetres / 2));
 }
 
+export type FacadeStyle = "classic" | "brick" | "glass";
+
 /**
- * A building front: one 4 m x 4 m tile, a pale wall (tinted per building) with
- * two windows, a floor line and a sill. Repeats up and along a facade. Windows
- * are dark glass with a few lit ones. `null` under Node.
+ * A building front: one 4 m x 4 m tile that repeats up and along a facade, its
+ * floor line at the bottom of the tile and two windows in it. Three styles: a
+ * pale rendered wall with dark windows (tinted per building), a brick wall with
+ * stone sills, and a glass curtain wall for the towers. `null` under Node.
  */
-export function createFacadeTexture(): THREE.CanvasTexture | null {
+export function createFacadeTexture(style: FacadeStyle = "classic"): THREE.CanvasTexture | null {
   if (!canvasAvailable()) return null;
   const size = 256;
   const { canvas, ctx } = makeCanvas(size);
-  ctx.fillStyle = "#e6e1d8";
-  ctx.fillRect(0, 0, size, size);
-  speckle(ctx, size, 1500, () => `rgba(${150 + Math.floor(Math.random() * 60)},${140 + Math.floor(Math.random() * 60)},${130 + Math.floor(Math.random() * 60)},0.25)`, 0.6, 1.6);
-  // Floor line at the bottom of the tile.
-  ctx.fillStyle = "rgba(90,84,76,0.65)";
-  ctx.fillRect(0, size - 10, size, 10);
-  // Two windows per tile.
-  for (const cx of [size * 0.27, size * 0.73]) {
-    const w = size * 0.28;
-    const h = size * 0.5;
-    const x = cx - w / 2;
-    const y = size * 0.2;
-    ctx.fillStyle = "rgba(60,56,52,0.9)";
-    ctx.fillRect(x - 5, y - 5, w + 10, h + 10);
-    const lit = Math.random() < 0.3;
-    const glass = ctx.createLinearGradient(0, y, 0, y + h);
-    glass.addColorStop(0, lit ? "#f2d98a" : "#6f8aa3");
-    glass.addColorStop(1, lit ? "#d9b45c" : "#2d3f52");
-    ctx.fillStyle = glass;
-    ctx.fillRect(x, y, w, h);
-    ctx.fillStyle = "rgba(60,56,52,0.9)";
-    ctx.fillRect(x + w / 2 - 2, y, 4, h);
-    ctx.fillRect(x, y + h * 0.35 - 2, w, 4);
-    // Sill.
-    ctx.fillStyle = "rgba(200,194,184,1)";
-    ctx.fillRect(x - 9, y + h + 5, w + 18, 7);
+
+  if (style === "glass") {
+    // Four panes by four floors' worth of grid: blue-grey glass with a reflected sky gradient and thin mullions.
+    ctx.fillStyle = "#30465c";
+    ctx.fillRect(0, 0, size, size);
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 4; col++) {
+        const x = (col * size) / 4;
+        const y = (row * size) / 2;
+        const glass = ctx.createLinearGradient(0, y, 0, y + size / 2);
+        const lit = Math.random() < 0.18;
+        glass.addColorStop(0, lit ? "#e8d9a0" : "#8aa6bf");
+        glass.addColorStop(1, lit ? "#c8aa62" : "#3b5670");
+        ctx.fillStyle = glass;
+        ctx.fillRect(x + 3, y + 3, size / 4 - 6, size / 2 - 6);
+      }
+    }
+    ctx.fillStyle = "rgba(210,216,222,0.9)";
+    ctx.fillRect(0, size - 8, size, 8);
+  } else {
+    const brick = style === "brick";
+    ctx.fillStyle = brick ? "#a8604a" : "#e6e1d8";
+    ctx.fillRect(0, 0, size, size);
+    if (brick) {
+      // Courses of brick, every other row offset, with dark mortar.
+      ctx.strokeStyle = "rgba(60,36,28,0.55)";
+      ctx.lineWidth = 1.5;
+      for (let y = 0; y < size; y += 8) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(size, y);
+        ctx.stroke();
+        for (let x = (y / 8) % 2 ? 0 : 16; x < size; x += 32) {
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x, y + 8);
+          ctx.stroke();
+        }
+      }
+    }
+    speckle(ctx, size, 1500, () => `rgba(${150 + Math.floor(Math.random() * 60)},${130 + Math.floor(Math.random() * 60)},${120 + Math.floor(Math.random() * 60)},0.22)`, 0.6, 1.6);
+    // Floor line at the bottom of the tile.
+    ctx.fillStyle = brick ? "rgba(70,44,36,0.8)" : "rgba(90,84,76,0.65)";
+    ctx.fillRect(0, size - 10, size, 10);
+    for (const cx of [size * 0.27, size * 0.73]) {
+      const w = size * 0.28;
+      const h = size * 0.5;
+      const x = cx - w / 2;
+      const y = size * 0.2;
+      ctx.fillStyle = brick ? "rgba(214,204,188,1)" : "rgba(60,56,52,0.9)";
+      ctx.fillRect(x - 6, y - 6, w + 12, h + 12);
+      const lit = Math.random() < 0.3;
+      const glass = ctx.createLinearGradient(0, y, 0, y + h);
+      glass.addColorStop(0, lit ? "#f2d98a" : "#6f8aa3");
+      glass.addColorStop(1, lit ? "#d9b45c" : "#2d3f52");
+      ctx.fillStyle = glass;
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = "rgba(60,56,52,0.9)";
+      ctx.fillRect(x + w / 2 - 2, y, 4, h);
+      ctx.fillRect(x, y + h * 0.35 - 2, w, 4);
+      ctx.fillStyle = "rgba(200,194,184,1)";
+      ctx.fillRect(x - 9, y + h + 5, w + 18, 7);
+    }
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = THREE.RepeatWrapping;
@@ -368,7 +408,58 @@ export function createFacadeTexture(): THREE.CanvasTexture | null {
   return texture;
 }
 
-export type SignKind = "arrow-left" | "arrow-right" | "diamond-left" | "diamond-right";
+/** A ground-floor shopfront, one 4 m x 3.6 m tile: dark glass windows, a door and a sign band on top. `null` under Node. */
+export function createShopfrontTexture(): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#cfc9bd";
+  ctx.fillRect(0, 0, size, size);
+  // Sign band.
+  ctx.fillStyle = "#f0ece0";
+  ctx.fillRect(0, 0, size, size * 0.2);
+  ctx.fillStyle = "rgba(40,40,44,0.8)";
+  ctx.fillRect(size * 0.12, size * 0.06, size * 0.5, size * 0.08);
+  // Shop windows and a door.
+  const panes: [number, number][] = [[0.04, 0.5], [0.58, 0.38]];
+  for (const [x, w] of panes) {
+    const glass = ctx.createLinearGradient(0, size * 0.28, 0, size);
+    glass.addColorStop(0, "#9bb3c6");
+    glass.addColorStop(1, "#33475a");
+    ctx.fillStyle = "rgba(50,48,46,1)";
+    ctx.fillRect(size * x - 4, size * 0.26, size * w + 8, size * 0.72);
+    ctx.fillStyle = glass;
+    ctx.fillRect(size * x, size * 0.3, size * w, size * 0.66);
+  }
+  ctx.fillStyle = "rgba(50,48,46,1)";
+  ctx.fillRect(size * 0.58 + size * 0.38 * 0.5 - 2, size * 0.3, 4, size * 0.66);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+/** Vertical stripes, cream and a strong colour (tinted per awning): an awning's fabric. `null` under Node. */
+export function createAwningTexture(): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const size = 64;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#f4efe2";
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = "#ffffff";
+  for (let x = 0; x < size; x += 16) ctx.fillRect(x, 0, 8, size);
+  ctx.fillStyle = "rgba(0,0,0,0.12)";
+  for (let x = 8; x < size; x += 16) ctx.fillRect(x, 0, 8, size);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+export type SignKind = "arrow-left" | "arrow-right" | "diamond-left" | "diamond-right" | "limit" | "ahead" | "no-entry";
 
 /**
  * A roadside curve sign: a white board with a bold bend arrow, or a yellow
@@ -381,6 +472,57 @@ export function createSignTexture(kind: SignKind): THREE.CanvasTexture | null {
   const left = kind.endsWith("left");
   const diamond = kind.startsWith("diamond");
   ctx.clearRect(0, 0, size, size);
+
+  if (kind === "limit" || kind === "no-entry") {
+    // A round sign: white disc and red ring with a speed, or a red disc with a white bar.
+    const cx = size / 2;
+    ctx.beginPath();
+    ctx.arc(cx, cx, size / 2 - 4, 0, Math.PI * 2);
+    ctx.fillStyle = kind === "limit" ? "#f6f4ec" : "#c8201c";
+    ctx.fill();
+    if (kind === "limit") {
+      ctx.lineWidth = 12;
+      ctx.strokeStyle = "#c8201c";
+      ctx.beginPath();
+      ctx.arc(cx, cx, size / 2 - 12, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "#111";
+      ctx.font = "bold 52px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("50", cx, cx + 3);
+    } else {
+      ctx.fillStyle = "#f6f4ec";
+      ctx.fillRect(size * 0.2, size * 0.43, size * 0.6, size * 0.14);
+    }
+    const round = new THREE.CanvasTexture(canvas);
+    round.colorSpace = THREE.SRGBColorSpace;
+    round.anisotropy = 4;
+    return round;
+  }
+  if (kind === "ahead") {
+    // A blue square with a white arrow straight on.
+    ctx.fillStyle = "#1b5aa6";
+    ctx.fillRect(4, 4, size - 8, size - 8);
+    ctx.strokeStyle = "#f6f4ec";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(8, 8, size - 16, size - 16);
+    ctx.fillStyle = "#f6f4ec";
+    ctx.beginPath();
+    ctx.moveTo(size / 2, size * 0.2);
+    ctx.lineTo(size * 0.74, size * 0.5);
+    ctx.lineTo(size * 0.57, size * 0.5);
+    ctx.lineTo(size * 0.57, size * 0.8);
+    ctx.lineTo(size * 0.43, size * 0.8);
+    ctx.lineTo(size * 0.43, size * 0.5);
+    ctx.lineTo(size * 0.26, size * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    const square = new THREE.CanvasTexture(canvas);
+    square.colorSpace = THREE.SRGBColorSpace;
+    square.anisotropy = 4;
+    return square;
+  }
 
   if (diamond) {
     ctx.fillStyle = "#f2b61c";

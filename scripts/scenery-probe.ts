@@ -26,7 +26,7 @@ for (const layout of TRACKS) {
   const signs = built.group.getObjectByName("curve-signs");
   const posts = signs?.getObjectByName("sign-posts") as THREE.InstancedMesh | undefined;
   const crowns = scenery.group.getObjectByName("scenery-crowns") as THREE.InstancedMesh | undefined;
-  const street = scenery.group.getObjectByName("city-street");
+  const street = scenery.group.getObjectByName("city-buildings");
 
   // Distance from a ground point to the nearest road centreline sample.
   const nearestRoad = (p: THREE.Vector3): number => {
@@ -68,6 +68,28 @@ for (const layout of TRACKS) {
     }
   }
   const light = built.group.getObjectByName("start-light");
+  const furniture = scenery.group.getObjectByName("city-street-furniture");
+  const detail = scenery.group.getObjectByName("city-building-detail");
+  if (furniture) {
+    // Street furniture must stand clear of the asphalt (the zebra crossing and the lights at its ends are meant to be on or by it).
+    let closest = Infinity;
+    const p = new THREE.Vector3();
+    const matrix = new THREE.Matrix4();
+    const counts: string[] = [];
+    furniture.children.forEach((child) => {
+      const instanced = child as THREE.InstancedMesh;
+      if (!instanced.isInstancedMesh) return;
+      counts.push(`${instanced.name.replace("city-", "")} ${instanced.count}`);
+      if (/zebra|light/.test(instanced.name)) return;
+      for (let n = 0; n < instanced.count; n++) {
+        instanced.getMatrixAt(n, matrix);
+        p.setFromMatrixPosition(matrix);
+        closest = Math.min(closest, nearestRoad(p));
+      }
+    });
+    const detailCounts = detail ? detail.children.map((c) => `${c.name.replace("city-", "")} ${(c as THREE.InstancedMesh).count}`) : [];
+    console.log(`    street: ${counts.join(", ")}\n    buildings: ${detailCounts.join(", ")}\n    nearest furniture to the road: ${closest.toFixed(1)} m (asphalt edge at ${ROAD_HALF_WIDTH} m)`);
+  }
   console.log(
     `${layout.name.padEnd(20)} ${String(posts?.count ?? 0).padStart(4)}  ${String(crowns?.count ?? 0).padStart(10)}  ${String(buildings).padStart(9)}  ${(buildings ? worst.toFixed(1) + " m" : "-").padStart(22)}  ${String(offRoad).padStart(13)}  ${light ? "yes" : "NO"}`,
   );

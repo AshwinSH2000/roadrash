@@ -71,6 +71,8 @@ export class LoopRide {
   private targetLateral: number;
   private lateralVelocity = 0;
   private airborneTime = 0;
+  private heightAbove = 1;
+  private heightSpeed = 0;
   private readonly frame: LoopFrame = LoopGeometry.createFrame();
   private readonly tmpOffset = new THREE.Vector3();
   private readonly tmpForward = new THREE.Vector3();
@@ -108,8 +110,11 @@ export class LoopRide {
     this.geometry.frame(this.theta, this.frame);
     this.tmpOffset.subVectors(position, this.frame.position);
 
+    this.heightAbove = this.tmpOffset.dot(this.frame.normal);
+    this.heightSpeed = velocity.dot(this.frame.normal);
     const lateral = this.tmpOffset.dot(this.geometry.across);
-    this.lateralVelocity = (lateral - this.lateral) / dt;
+    // Smoothed: a raw one-step difference is mostly noise, and the steering reads it.
+    this.lateralVelocity += ((lateral - this.lateral) / dt - this.lateralVelocity) * 0.15;
     this.lateral = lateral;
     this.speed = velocity.dot(this.frame.tangent);
 
@@ -147,6 +152,14 @@ export class LoopRide {
   requiredNormalAcceleration(): number {
     const f = this.frame;
     return Math.max(0, this.speed) ** 2 * f.curvature + GRAVITY * f.normal.y;
+  }
+
+  /** Metres the chassis centre sits off the ribbon, along its normal, and how fast that is changing. */
+  get height(): number {
+    return this.heightAbove;
+  }
+  get heightRate(): number {
+    return this.heightSpeed;
   }
 
   /** Unit vector the road pushes along: into the loop. */

@@ -297,6 +297,8 @@ export class Bike {
     }
   }
 
+  private readonly drawnSuspension: [number, number] = [0.45, 0.45];
+
   /** Reads the wheel centres, spin and steer from the physics into the "current" slots. */
   private captureWheels(): void {
     this.tmpDown.copy(LOCAL_DOWN).applyQuaternion(this.currQuat);
@@ -305,9 +307,15 @@ export class Bike {
       const hardPoint = this.controller.wheelHardPoint(index);
       this.wheelCenterValid[i] = hardPoint !== null;
       if (hardPoint) {
+        // On a loop the springs flick between touching and not under the load;
+        // draw them through a low-pass so the wheels do not twitch.
+        const length = this.controller.wheelSuspensionLength(index);
+        this.drawnSuspension[i] = this.controller.currentLoopRide
+          ? this.drawnSuspension[i] + (length - this.drawnSuspension[i]) * 0.2
+          : length;
         this.currWheelCenters[i]
           .copy(hardPoint)
-          .addScaledVector(this.tmpDown, this.controller.wheelSuspensionLength(index));
+          .addScaledVector(this.tmpDown, this.drawnSuspension[i]);
       }
       this.currWheelSpin[i] = this.controller.wheelRotation(index);
     }
@@ -342,6 +350,7 @@ export class Bike {
     const r = this.controller.chassisBody.rotation();
     outPos.set(t.x, t.y, t.z);
     outQuat.set(r.x, r.y, r.z, r.w);
+    this.controller.drawnLoopAttitude(outQuat);
   }
 
   /**

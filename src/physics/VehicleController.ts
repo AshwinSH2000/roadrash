@@ -263,10 +263,19 @@ const LOOP_MAX_SUSPENSION_FORCE = 60000;
 const LOOP_SUSPENSION_STIFFNESS = 100;
 const LOOP_SUSPENSION_DAMPING = 20;
 /** Share of the loop's centripetal push applied straight to the chassis; the suspension carries the rest. */
-const LOOP_RAIL_SHARE = 0.8;
-/** Balancing torque on a loop: stiffness (1/s^2) and damping (1/s) per unit of inertia. */
-const LOOP_BALANCE_STIFFNESS = 150;
-const LOOP_BALANCE_DAMPING = 22;
+const LOOP_RAIL_SHARE = 0.6;
+/** Height the chassis is held at over the ribbon, metres (the springs' rest height is about 1.1), and the spring and damper that hold it. */
+const LOOP_RIDE_HEIGHT = 1.0;
+const LOOP_HEIGHT_STIFFNESS = 150;
+const LOOP_HEIGHT_DAMPING = 18;
+/** The most that height hold may push or pull, m/s^2. */
+const LOOP_HEIGHT_LIMIT = 40;
+/** How far, 0..1, the drawn loop attitude is taken from the physics one toward the ride's own. */
+const LOOP_DRAW_SMOOTHING = 0.85;
+/** Seconds over which the drawn attitude eases onto the ride's at the entry. */
+const LOOP_DRAW_EASE_IN = 0.4;
+/** How hard the chassis is pulled onto its target attitude on a loop, per second of angle error. */
+const LOOP_BALANCE_RATE = 14;
 
 export class VehicleController {
   readonly chassisBody: RAPIER.RigidBody;
@@ -297,7 +306,7 @@ export class VehicleController {
   private readonly tmpLoopQuat = new THREE.Quaternion();
   private readonly tmpLoopVel = new THREE.Vector3();
   private readonly tmpLoopAngvel = new THREE.Vector3();
-  private readonly tmpLoopTorque = new THREE.Vector3();
+  private loopDrawBlend = 0;
   private readonly tmpLoopQuat2 = new THREE.Quaternion();
   private readonly tmpLoopVec = new THREE.Vector3();
 
@@ -645,6 +654,7 @@ export class VehicleController {
     if (this.loopRide || !this.riderAttached) return;
     this.loopRide = new LoopRide(geometry, entrySpeed, lateral);
     this.loopOutcome = null;
+    this.loopDrawBlend = 0;
     this.chassisBody.setEnabledRotations(true, true, true, true);
     for (let i = 0; i < 2; i++) {
       this.vehicle.setWheelMaxSuspensionForce(i, LOOP_MAX_SUSPENSION_FORCE);
@@ -680,20 +690,31 @@ export class VehicleController {
     // box then ploughs into the ramp). The wheels still carry the remainder,
     // and that load is what gives them grip to drive and brake with. Speed,
     // height and the moment the bike comes off all still come from physics.
-    const push = ride.requiredNormalAcceleration() * LOOP_RAIL_SHARE * this.config.chassisMass;
+    const hold = THREE.MathUtils.clamp(
+      LOOP_HEIGHT_STIFFNESS * (LOOP_RIDE_HEIGHT - ride.height) - LOOP_HEIGHT_DAMPING * ride.heightRate,
+      -LOOP_HEIGHT_LIMIT,
+      LOOP_HEIGHT_LIMIT,
+    );
+    const push = (ride.requiredNormalAcceleration() * LOOP_RAIL_SHARE + hold) * this.config.chassisMass;
     const n = ride.normal;
     this.chassisBody.addForce({ x: n.x * push, y: n.y * push, z: n.z * push }, true);
     this.vehicle.updateVehicle(dt, undefined, GROUPS_WHEEL_RAY);
     this.transmission.update(this.forwardSpeed, dt);
   }
 
-  /** PD torque, about each of the chassis's own axes, toward the ride's target attitude. */
+  /**
+   * Holds the chassis on the attitude the ride asks for by commanding its
+   * turn rate: the rate the path itself demands, plus a pull toward the
+   * target proportional to the angle still to go. Commanding torque instead
+   * was tried first, and the contact forces at 6-10 g swamp any torque that
+   * is stable at this step size.
+   */
   private applyLoopBalance(ride: LoopRide): void {
     const q = this.chassisBody.rotation();
     this.tmpLoopQuat.set(q.x, q.y, q.z, q.w);
     ride.targetAttitude(this.tmpLoopQuat2);
-    // Error rotation in the chassis's own frame: q^-1 * target.
-    const error = this.tmpLoopQuat.clone().invert().multiply(this.tmpLoopQuat2);
+    // Error rotation in the world frame: target * q^-1.
+    const error = this.tmpLoopQuat2.clone().multiply(this.tmpLoopQuat.clone().invert());
     if (error.w < 0) error.set(-error.x, -error.y, -error.z, -error.w);
     const angle = 2 * Math.acos(Math.min(1, error.w));
     const sin = Math.sqrt(Math.max(0, 1 - error.w * error.w));
@@ -701,25 +722,29 @@ export class VehicleController {
     if (sin > 1e-6) e.multiplyScalar(angle / sin);
     else e.set(0, 0, 0);
 
-    const w = this.chassisBody.angvel();
-    // Spin relative to the spin the path itself demands; without that, holding
-    // the nose on a circle at speed would mean a permanent lag behind it.
-    ride.targetAngularVelocity(this.tmpLoopTorque);
-    this.tmpLoopAngvel.set(w.x - this.tmpLoopTorque.x, w.y - this.tmpLoopTorque.y, w.z - this.tmpLoopTorque.z).applyQuaternion(this.tmpLoopQuat.clone().invert());
-    const inertia = this.chassisBody.principalInertia();
-    this.tmpLoopTorque.set(
-      inertia.x * (LOOP_BALANCE_STIFFNESS * e.x - LOOP_BALANCE_DAMPING * this.tmpLoopAngvel.x),
-      inertia.y * (LOOP_BALANCE_STIFFNESS * e.y - LOOP_BALANCE_DAMPING * this.tmpLoopAngvel.y),
-      inertia.z * (LOOP_BALANCE_STIFFNESS * e.z - LOOP_BALANCE_DAMPING * this.tmpLoopAngvel.z),
-    );
-    this.tmpLoopTorque.applyQuaternion(this.tmpLoopQuat);
-    this.chassisBody.addTorque({ x: this.tmpLoopTorque.x, y: this.tmpLoopTorque.y, z: this.tmpLoopTorque.z }, true);
+    ride.targetAngularVelocity(this.tmpLoopAngvel);
+    this.tmpLoopAngvel.addScaledVector(e, LOOP_BALANCE_RATE);
+    this.chassisBody.setAngvel({ x: this.tmpLoopAngvel.x, y: this.tmpLoopAngvel.y, z: this.tmpLoopAngvel.z }, true);
+  }
+
+  /**
+   * The chassis attitude to draw: the physics one, pulled most of the way to
+   * the attitude the ride is holding it at. At 6-10 g the contact forces keep
+   * the real chassis shivering by a degree or so each step; the target is
+   * smooth, and the two are never far apart.
+   */
+  drawnLoopAttitude(inout: THREE.Quaternion): void {
+    if (!this.loopRide) return;
+    this.loopRide.targetAttitude(this.tmpLoopQuat2);
+    inout.slerp(this.tmpLoopQuat2, LOOP_DRAW_SMOOTHING * this.loopDrawBlend);
   }
 
   /** After the physics step: reads where the bike got to and ends the ride if it is over. */
   observeLoopRide(dt: number): void {
     const ride = this.loopRide;
     if (!ride) return;
+    // Eases the drawn attitude onto the ride's own over the first moments, so it does not jump at the entry.
+    this.loopDrawBlend = Math.min(1, this.loopDrawBlend + dt / LOOP_DRAW_EASE_IN);
     const p = this.chassisBody.translation();
     const v = this.chassisBody.linvel();
     this.tmpLoopPos.set(p.x, p.y, p.z);

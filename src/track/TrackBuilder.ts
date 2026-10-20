@@ -717,25 +717,6 @@ function buildLoop(
     group.add(new THREE.Mesh(lip.geometry, lipMaterial));
   }
 
-  // Pillars from the ground to the ribbon's edges.
-  const pillarMaterial = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.6 });
-  const frame = LoopGeometry.createFrame();
-  const groundY = loop.origin.y;
-  for (const degrees of [50, 130, 230, 310]) {
-    loop.frame(THREE.MathUtils.degToRad(degrees), frame);
-    for (const side of [-1, 1] as const) {
-      const x = frame.position.x + loop.across.x * side * (ROAD_HALF_WIDTH + 0.4);
-      const z = frame.position.z + loop.across.z * side * (ROAD_HALF_WIDTH + 0.4);
-      const topY = frame.position.y - 0.3;
-      const height = topY - groundY;
-      if (height < 0.5) continue;
-      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, height, 8), pillarMaterial);
-      pillar.position.set(x, groundY + height / 2, z);
-      pillar.castShadow = true;
-      group.add(pillar);
-    }
-  }
-
   // Ground under the loop, between where the bands stop and start again.
   const length = loop.advance + 12;
   const width = loop.shift + OFFROAD_HALF_WIDTH * 2;

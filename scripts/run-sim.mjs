@@ -50,6 +50,7 @@ const entries = {
   camera: "camera-probe.ts",
   tone: "ragdoll-tone-probe.ts",
   riderskel: "rider-skeleton-probe.ts",
+  scenery: "scenery-probe.ts",
   ridercharacter: "rider-character-probe.ts",
 };
 const entry = entries[which];

@@ -182,7 +182,7 @@ export class CameraRig {
       if (head) {
         head.getWorldPosition(this.eye);
         // Where the head points: the bike's heading, turned by the head's own yaw.
-        this.yawQuat.setFromAxisAngle(this.world, head.rotation.y);
+        this.yawQuat.setFromAxisAngle(this.world, (head.userData.yaw as number | undefined) ?? head.rotation.y);
       } else {
         group.localToWorld(this.eye.set(0, 0.55, -0.1));
         this.yawQuat.identity();

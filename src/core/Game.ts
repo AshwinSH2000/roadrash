@@ -10,6 +10,7 @@ import { Bike } from "../entities/Bike";
 import { PlayerController } from "../entities/PlayerController";
 import { BrakeToStopDriver, Racer } from "../entities/Racer";
 import { RiderStateMachine } from "../entities/RiderStateMachine";
+import { setRiderCharacter } from "../entities/RiderCharacter";
 import { AttackPhase, CombatSystem, type HitEvent } from "../combat/CombatSystem";
 import { RaceFlow, RacePhase, RaceResult } from "./RaceFlow";
 import { HUD, MINIMAP_RANGE, type HudStanding, type MinimapData, type MinimapTrackSample } from "../ui/HUD";
@@ -211,6 +212,14 @@ export class Game {
 
     this.assets = assets;
     this.buildBikeVisualsFactory();
+    // The skinned rider, when rider.glb is present; every rider made after this wears it.
+    const riderAsset = assets.get("rider");
+    try {
+      setRiderCharacter(riderAsset ? riderAsset.scene : null);
+    } catch (error) {
+      console.error(`[assets] rider model could not be used, keeping the procedural rider.\n${String(error)}`);
+      setRiderCharacter(null);
+    }
 
     this.input = new InputManager();
     this.mobileInput = new MobileInputManager();

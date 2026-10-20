@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { createLimbPose, createRiderCharacter, type RiderCharacter, type RiderPose } from "./RiderCharacter";
 
 /**
  * A procedural, seated rider built from tapered limbs, rounded pads and a
@@ -50,6 +52,8 @@ const PADDLE_BACK = -0.5;
 const PADDLE_LIFT = 0.14;
 /** Head turned over the shoulder to look behind while reversing, radians. */
 const REVERSE_HEAD_TURN = 1.25;
+/** How much taller the skinned figure's hips stand on foot than the procedural figure's, metres. */
+const ON_FOOT_LIFT = 0.15;
 const REVERSE_TORSO_TWIST = 0.45;
 /** The released arm hangs this far straight down from the shoulder, and a little out (the arm is about 0.56 m long). */
 const REVERSE_HANG_DROP = 0.54;
@@ -172,6 +176,8 @@ class Limb {
   readonly end: Part;
   private readonly rootPad: Pad;
   private readonly midPad: Pad;
+  /** Where this limb's root, bend and tip ended up, for the skinned figure to follow. */
+  readonly pose = createLimbPose();
   private readonly shoe: THREE.Group | null;
   private readonly tmpQuat = new THREE.Quaternion();
   private readonly tmpOffset = new THREE.Vector3();
@@ -224,6 +230,10 @@ class Limb {
   /** Places the parts along root -> mid -> tip directly, for poses worked out by forward kinematics. */
   place(root: THREE.Vector3, mid: THREE.Vector3, tip: THREE.Vector3): void {
     this.forward.subVectors(tip, mid).normalize();
+    this.pose.root.copy(root);
+    this.pose.mid.copy(mid);
+    this.pose.tip.copy(tip);
+    this.pose.forward.copy(this.forward);
     this.rootPad.mesh.position.copy(root);
     this.midPad.mesh.position.copy(mid);
     this.upper.between(root, mid);
@@ -265,7 +275,7 @@ function createMaterials(color: number): RiderMaterials {
   const pants = make(0x23262e, 0.85, true);
   const gear = make(0x15161a, 0.6);
   // Glossy shell, and a visor that is clearly a different surface from it.
-  const helmet = new THREE.MeshStandardMaterial({ color, roughness: 0.22, metalness: 0.15 });
+  const helmet = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.8).getHex(), roughness: 0.22, metalness: 0.15 });
   const visor = new THREE.MeshStandardMaterial({ color: 0x0f1a26, roughness: 0.08, metalness: 0.4, side: THREE.DoubleSide });
   const baton = make(0x1b1c20, 0.4);
   const accent = make(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.78).getHex(), 0.5);
@@ -299,6 +309,98 @@ function dressTorso(torso: THREE.Mesh, m: RiderMaterials): void {
   addBand(torso, m.accent, 0.03, 0.05, 2 * radiusAt(0.03) * 1.04);
   addBand(torso, m.gear, -0.46, 0.1, 2 * radiusAt(-0.46) * 1.05);
   addBand(torso, m.gear, 0.5, 0.1, 0.44);
+}
+
+const smoothstep01 = (a: number, b: number, x: number): number => {
+  const t = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * A full-face helmet sized for the skinned figure's head (about 18 cm wide, 21 cm deep and 24 cm tall).
+ *
+ * It is one shell, like the real thing: a sphere pulled into a helmet. The front
+ * of its lower half is drawn out and down into the chin bar, the jaw narrows, the
+ * back of the neck is tucked in, and the bottom is left open for the neck. The
+ * visor port, the trim ring round it, the mouth vent and the crown stripe are not
+ * extra pieces but regions of the same surface drawn in their own material. A
+ * small rear spoiler and a neck seal finish it. Built round the middle of the
+ * head, +Z forward, in metres; the shell is the jacket's colour.
+ */
+function buildFullFaceHelmet(m: RiderMaterials): THREE.Group {
+  const helmet = new THREE.Group();
+
+  let sphere: THREE.BufferGeometry = new THREE.SphereGeometry(1, 64, 44);
+  sphere.deleteAttribute("normal");
+  sphere.deleteAttribute("uv");
+  sphere = mergeVertices(sphere, 1e-4);
+  const pos = sphere.getAttribute("position");
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const front = smoothstep01(-0.15, 0.55, z);
+    const low = smoothstep01(0.05, -0.62, y);
+    const chin = front * low;
+    // Draw the chin bar forward and down, narrow the jaw, tuck in the back of the neck.
+    const tuck = smoothstep01(-0.3, -0.8, y) * (1 - front);
+    pos.setXYZ(
+      i,
+      x * (1 - 0.18 * chin) * (1 - 0.14 * tuck),
+      y - 0.1 * chin,
+      z * (1 + 0.2 * chin) * (1 - 0.1 * tuck),
+    );
+  }
+
+  // Sort the triangles into regions of the one surface.
+  const index = sphere.getIndex()!;
+  const regions: number[][] = [[], [], [], []]; // shell, visor, trim, vent
+  for (let t = 0; t < index.count; t += 3) {
+    const a = index.getX(t);
+    const b = index.getX(t + 1);
+    const c = index.getX(t + 2);
+    const cy = (pos.getY(a) + pos.getY(b) + pos.getY(c)) / 3;
+    // The neck is open: nothing below the jaw line.
+    if (Math.max(pos.getY(a), pos.getY(b), pos.getY(c)) < -0.84) continue;
+    const cx = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3;
+    const cz = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3;
+    const port = (cx / 0.8) ** 2 + ((cy - 0.13) / 0.27) ** 2;
+    const ring = (cx / 0.94) ** 2 + ((cy - 0.13) / 0.34) ** 2;
+    let region = 0;
+    if (cz > 0.25 && port < 1) region = 1;
+    else if (cz > 0.2 && ring < 1) region = 2;
+    else if (cz > 0.5 && cy < -0.46 && cy > -0.68 && Math.abs(cx) < 0.3) region = 3;
+    else if (Math.abs(cx) < 0.07 && cy > 0.45) region = 2;
+    regions[region].push(a, b, c);
+  }
+  const ordered: number[] = [];
+  regions.forEach((list, n) => {
+    sphere.addGroup(ordered.length, list.length, n);
+    ordered.push(...list);
+  });
+  sphere.setIndex(ordered);
+  sphere.computeVertexNormals();
+
+  const shell = new THREE.Mesh(sphere, [m.helmet, m.visor, m.accent, m.gear]);
+  shell.scale.set(0.098, 0.124, 0.122);
+  shell.position.set(0, 0.012, -0.004);
+  shell.castShadow = true;
+  shell.frustumCulled = false;
+  helmet.add(shell);
+
+  // Rear spoiler, in the shell's material, and a dark seal where the helmet meets the neck.
+  const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), m.helmet);
+  spoiler.scale.set(0.09, 0.016, 0.06);
+  spoiler.position.set(0, 0.07, -0.125);
+  spoiler.rotation.x = -0.35;
+  spoiler.castShadow = true;
+  spoiler.frustumCulled = false;
+  helmet.add(spoiler);
+  const seal = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.08, 0.026, 18), m.gear);
+  seal.position.set(0, -0.095, -0.012);
+  seal.frustumCulled = false;
+  helmet.add(seal);
+  return helmet;
 }
 
 /** The helmet: glossy shell, wrap-around visor, chin guard, top stripe and a small rear spoiler. */
@@ -488,6 +590,30 @@ export class RiderModel {
   private readonly b = new THREE.Vector3();
   private readonly c = new THREE.Vector3();
 
+  /** The skinned figure that wears this pose, when `rider.glb` is loaded; the boxes below are then hidden. */
+  private character: RiderCharacter | null = null;
+  /** Helmet on the figure's head bone, and the point a first-person camera sits at. */
+  private characterHelmet: THREE.Object3D | null = null;
+  private eyeAnchor: THREE.Object3D | null = null;
+  private readonly pose: RiderPose = {
+    hips: new THREE.Vector3(),
+    spineBase: new THREE.Vector3(),
+    spineTop: new THREE.Vector3(),
+    twist: 0,
+    headYaw: 0,
+    arms: [createLimbPose(), createLimbPose()],
+    legs: [createLimbPose(), createLimbPose()],
+    curl: [0.35, 0.35],
+  };
+  private lastTwist = 0;
+  /**
+   * The procedural figure stands 0.84 m at the hip; the skinned one 1.0 m. On foot the pose is raised by this
+   * much (zero when seated, where the hips are set on the seat) so the legs are not left bent to reach the ground.
+   */
+  private figureLift = 0;
+  /** Fist closure per arm for the next `drive`: a gripping hand is closed, a hanging or running one is loose. */
+  private readonly curl: [number, number] = [0.35, 0.35];
+
   constructor(color: number) {
     const m = (this.materials = createMaterials(color));
     const { jacket, pants, gear } = m;
@@ -512,6 +638,60 @@ export class RiderModel {
     for (const limb of [...this.arms, ...this.legs]) for (const part of limb.parts) this.object.add(part.mesh);
 
     this.update();
+
+    const character = createRiderCharacter(color);
+    if (character) this.wear(character);
+  }
+
+  /** Dresses the figure in the pose: hides the boxes, mounts a helmet and an eye on its head. */
+  private wear(character: RiderCharacter): void {
+    this.character = character;
+    this.object.add(character.holder);
+    for (const mesh of [this.pelvis.mesh, this.torso.mesh]) mesh.visible = false;
+    for (const limb of [...this.arms, ...this.legs]) for (const part of limb.parts) part.mesh.visible = false;
+    // The boxed helmet stays as the pose's reference (the camera and head turn read it) but is not drawn.
+    this.helmet.visible = false;
+
+    // Everything under a bone is measured in the bone's own units (centimetres), so a mount scaled back up gives metres.
+    const mount = new THREE.Group();
+    mount.scale.setScalar(1 / character.localUnit);
+    character.head.add(mount);
+    const helmet = buildFullFaceHelmet(this.materials);
+    // The middle of the figure's head sits about 10 cm above the head bone.
+    helmet.position.set(0, 0.1, 0.01);
+    mount.add(helmet);
+    this.characterHelmet = helmet;
+    const eye = new THREE.Object3D();
+    eye.position.set(0, 0.125, 0.02);
+    mount.add(eye);
+    this.eyeAnchor = eye;
+    this.drive();
+  }
+
+  /** Hands the pose that was just solved to the skinned figure. */
+  private drive(): void {
+    const character = this.character;
+    if (!character) return;
+    const p = this.pose;
+    p.hips.copy(this.hipCentre);
+    p.hips.y += this.figureLift;
+    p.spineBase.copy(this.base);
+    p.spineTop.copy(this.top);
+    p.twist = this.lastTwist;
+    p.headYaw = this.helmet.rotation.y;
+    for (let i = 0; i < 2; i++) {
+      p.arms[i].root.copy(this.arms[i].pose.root);
+      p.arms[i].mid.copy(this.arms[i].pose.mid);
+      p.arms[i].tip.copy(this.arms[i].pose.tip);
+      p.arms[i].forward.copy(this.arms[i].pose.forward);
+      p.legs[i].root.copy(this.legs[i].pose.root);
+      p.legs[i].mid.copy(this.legs[i].pose.mid);
+      p.legs[i].tip.copy(this.legs[i].pose.tip);
+      p.legs[i].forward.copy(this.legs[i].pose.forward);
+      p.curl[i] = this.curl[i];
+    }
+    character.pose(p);
+    if (this.eyeAnchor) this.eyeAnchor.userData.yaw = p.headYaw;
   }
 
   /**
@@ -722,6 +902,7 @@ export class RiderModel {
     this.top.copy(this.base).add(this.scratch.set(sway * 0.18, cos * TORSO_LENGTH, sin * TORSO_LENGTH));
     this.pelvis.between(this.scratch.copy(this.hipCentre).add(this.hip.set(0, -0.04, 0)), this.base);
     this.torso.between(this.base, this.top, twist);
+    this.lastTwist = twist;
 
     // Head sits on the shoulders, tilted up from the torso so the rider looks ahead.
     this.helmet.position.copy(this.top).add(this.scratch.set(0, 0.12, 0.07));
@@ -780,8 +961,14 @@ export class RiderModel {
       }
       this.pole.set(sign * 0.3, 0.2, 1);
       this.legs[index].solve(this.hip, this.target, this.pole, this.tip);
+
+      // A hand on the bar is closed round it; one hanging free (reversing) or throwing a punch is not.
+      const hanging = sign > 0 && this.reverseAmount > 0.5;
+      this.curl[index] = hanging ? 0.2 : striking && this.attackKind === "punch" ? 1 : 0.85;
     }
     this.baton.mesh.visible = this.batonShown;
+    this.figureLift = 0;
+    this.drive();
   }
 
   /**
@@ -821,7 +1008,10 @@ export class RiderModel {
       // Arm: swings opposite to the same-side leg, elbow bent about a right angle when running.
       const swing = -sign * 0.7 * a * Math.cos(phase);
       this.pumpArm(index, sign, swing, lerp(0.35, 1.35, a) - 0.2 * swing);
+      this.curl[index] = lerp(0.3, 0.8, a);
     }
+    this.figureLift = ON_FOOT_LIFT;
+    this.drive();
   }
 
   /** Getting up off the ground: `progress` 0 (crouched, hands pushing) to 1 (standing). */
@@ -845,7 +1035,10 @@ export class RiderModel {
       this.target.lerp(hang, smooth(seg(progress, 0.45, 0.95)));
       this.pole.set(sign, -0.5, -0.3);
       this.arms[index].solve(this.shoulder, this.target, this.pole, this.tip);
+      this.curl[index] = 0.35;
     }
+    this.figureLift = ON_FOOT_LIFT * p;
+    this.drive();
   }
 
   /**
@@ -874,7 +1067,10 @@ export class RiderModel {
       this.target.copy((sign > 0) === leftFirst ? targetA : targetB);
       this.pole.set(sign, -0.5, -0.3);
       this.arms[index].solve(this.shoulder, this.target, this.pole, this.tip);
+      this.curl[index] = 0.8;
     }
+    this.figureLift = ON_FOOT_LIFT * (1 - 0.6 * crouch);
+    this.drive();
   }
 
   /**
@@ -911,7 +1107,10 @@ export class RiderModel {
       hang.lerp(this.target, smooth(seg(p, 0.15, 0.7)));
       this.pole.set(sign, -0.5, -0.2);
       this.arms[index].solve(this.shoulder, hang, this.pole, this.tip);
+      this.curl[index] = lerp(0.35, 0.85, smooth(seg(p, 0.15, 0.7)));
     }
+    this.figureLift = ON_FOOT_LIFT * (1 - p);
+    this.drive();
   }
 
   /** Forward-kinematic arm: upper arm swung `swing` radians forward of hanging, forearm bent `bend` further. */
@@ -947,14 +1146,16 @@ export class RiderModel {
 
   /** The helmet, whose position and yaw a first-person camera follows. */
   get head(): THREE.Object3D {
-    return this.helmet;
+    return this.eyeAnchor ?? this.helmet;
   }
 
   setHeadVisible(visible: boolean): void {
-    this.helmet.visible = visible;
+    if (this.characterHelmet) this.characterHelmet.visible = visible;
+    else this.helmet.visible = visible;
   }
 
   dispose(): void {
+    this.character?.dispose();
     this.object.removeFromParent();
     // Box and sphere geometry are shared module-wide; only materials are owned.
     for (const material of this.materials.all) material.dispose();

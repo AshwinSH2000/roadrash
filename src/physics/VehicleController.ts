@@ -266,13 +266,14 @@ const REVERSE_HOLD_TIME = 0.35;
 /** Slower than this (m/s) counts as stationary for the rider's feet and the reverse hold. */
 const STATIONARY_SPEED = 0.3;
 
-/** Slower than this (m/s, along the ground) and braking while steering is just braking and turning. */
+/** Slower than this (m/s, along the ground) and holding drift while steering does nothing special. */
 const DRIFT_MIN_SPEED = 9;
 /** A drift ends when the bike has slowed below this, m/s. */
 const DRIFT_END_SPEED = 1.5;
-/** Steering input needed to start a drift (0..1), and brake input (-1..0). */
+/** Steering input needed to start a drift (0..1). */
 const DRIFT_STEER_THRESHOLD = 0.3;
-const DRIFT_BRAKE_THRESHOLD = -0.3;
+/** How much of the full brake a drift applies on its own, so the slide scrubs speed off without the brake key. */
+const DRIFT_BRAKE_SHARE = 1;
 /** The rear tyre's grip while drifting, as a fraction of normal: low enough to step out, not so low it is ice. */
 const DRIFT_REAR_GRIP = 0.36;
 /** How fast the nose is swung into the drift, rad/s, tapering to nothing as the slip angle nears `DRIFT_MAX_SLIP`. */
@@ -323,8 +324,8 @@ export class VehicleController {
   /** True while the chassis is kinematic and being moved by a script (the rider lifting a fallen bike). */
   private scripted = false;
   private lastEngineForce = 0;
-  /** Set by the player's controller each step: may brake-and-steer start a drift? Bots never set it. */
-  private driftAllowed = false;
+  /** Set by the player's controller each step: is the drift key held? Bots never set it. */
+  private driftHeld = false;
   private drifting = false;
   /** Seconds the bike has been stopped with the brake held. */
   private stoppedBraking = 0;
@@ -488,9 +489,9 @@ export class VehicleController {
     }
   }
 
-  /** Lets brake-plus-steer start a drift. Call every step, before `tick`; only the player's controller does. */
-  setDriftAllowed(allowed: boolean): void {
-    this.driftAllowed = allowed;
+  /** Whether the drift key is held. Call every step, before `tick`; only the player's controller does. */
+  setDriftHeld(held: boolean): void {
+    this.driftHeld = held;
   }
 
   /**
@@ -1098,17 +1099,16 @@ export class VehicleController {
   }
 
   /**
-   * Starts and ends a drift. Brake and steer together, at speed, on the
-   * ground, by the player: the rear tyre lets go and the bike slides round
-   * toward the side being steered, shedding speed as it goes. It ends when
-   * the brake is released or the bike has all but stopped.
+   * Starts and ends a drift. Drift key held and a direction steered, at
+   * speed, on the ground, by the player: the rear tyre lets go and the bike
+   * slides round toward the side being steered, braking as it goes. It ends
+   * when the key is released or the bike has all but stopped.
    */
   private updateDrift(): void {
     const v = this.chassisBody.linvel();
     const groundSpeed = Math.hypot(v.x, v.z);
-    const braking = this.throttleInput <= DRIFT_BRAKE_THRESHOLD;
     const grounded = this.vehicle.wheelIsInContact(0) || this.vehicle.wheelIsInContact(1);
-    const possible = this.driftAllowed && this.riderAttached && grounded && braking && !this.handbrake && !this.finishBraking;
+    const possible = this.driftHeld && this.riderAttached && grounded && !this.handbrake && !this.finishBraking;
     if (!possible) {
       this.drifting = false;
       return;
@@ -1319,6 +1319,12 @@ export class VehicleController {
     if (this.finishBraking) {
       engineForce = 0;
       brake = cfg.finishBrakeForce;
+    }
+
+    // A drift brakes the bike itself; throttle and the brake key are ignored.
+    if (this.drifting) {
+      engineForce = 0;
+      brake = cfg.brakeForce * DRIFT_BRAKE_SHARE;
     }
 
     this.lastEngineForce = engineForce;

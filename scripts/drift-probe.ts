@@ -30,7 +30,7 @@ async function run(kph: number, steer: number, allowed = true, hold = 6): Promis
   };
   const stepOnce = (thr: number, st: number) => {
     bike.setInput(thr, st);
-    c.setDriftAllowed(allowed);
+    c.setDriftHeld(allowed);
     bike.prePhysicsStep(FIXED_DT);
     physics.step();
     bike.postPhysicsStep();
@@ -41,7 +41,7 @@ async function run(kph: number, steer: number, allowed = true, hold = 6): Promis
   const h0 = heading();
   let peakSlip = 0, driftSteps = 0, peakRoll = 0, stopT = -1;
   for (let i = 0; i < 60 * hold; i++) {
-    stepOnce(-1, steer);
+    stepOnce(allowed ? 0 : -1, steer);
     if (c.isDrifting) driftSteps++;
     peakSlip = Math.max(peakSlip, Math.abs(c.slipAngle));
     const v = c.chassisBody.linvel();
@@ -57,12 +57,12 @@ async function run(kph: number, steer: number, allowed = true, hold = 6): Promis
   );
 }
 
-console.log("DRIFT — full brake then a direction:");
+console.log("DRIFT — drift key held with a direction:");
 for (const kph of [50, 90, 130]) {
   console.log(await run(kph, 1));
   console.log(await run(kph, -1));
 }
-console.log("a bot braking and steering must not drift:");
+console.log("a bot braking and steering (drift key not held) must not drift:");
 console.log(await run(90, 1, false));
 console.log("too slow to drift (under 9 m/s):");
 console.log(await run(25, 1));

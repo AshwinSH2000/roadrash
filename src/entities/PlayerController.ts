@@ -14,6 +14,8 @@ const PUNCH_KEY = "KeyP";
 const KICK_KEY = "KeyK";
 const NITRO_KEY = "KeyN";
 const HYPER_KEY = "KeyV";
+/** Test feature: hold with a direction to drift. Deliberately not shown anywhere on screen. */
+const DRIFT_KEYS = ["ShiftLeft", "ShiftRight"];
 /** Manual transmission only — a no-op in automatic (see Transmission.shiftUp/shiftDown). */
 const SHIFT_DOWN_KEY = "KeyQ";
 const SHIFT_UP_KEY = "KeyE";
@@ -68,7 +70,6 @@ export class PlayerController implements Driver {
     const steerInput = clamp(keyboardSteer + (this.mobile?.steer ?? 0));
 
     this.bike.setInput(throttleInput, steerInput);
-    // Brake plus a direction is a drift; only the player can ask for one.
-    this.bike.controller.setDriftAllowed(true);
+    this.bike.controller.setDriftHeld(this.input.isAnyDown(DRIFT_KEYS));
   }
 }

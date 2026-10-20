@@ -915,6 +915,73 @@ const TANK_PAINT_LIMIT = 0.4;
 const TANK_PAINT_DARKNESS = 0.55;
 
 /**
+ * Where the centre stand sits, in the model's own (mesh-local) coordinates:
+ * under the engine, between the wheels, down to the ground. Any separate piece
+ * of any mesh that lies wholly inside this box is the stand: its two U-legs and
+ * cross tube, the return spring, the lugs and the rubber feet. (Checked against
+ * the bundled CB 750: exactly those 2,320 triangles in three meshes qualify.)
+ */
+const STAND_BOX = new THREE.Box3(new THREE.Vector3(-0.12, 0.1, -0.01), new THREE.Vector3(0.2, 0.28, 0.26));
+
+/**
+ * Cuts the centre stand out of the model: the bike is being ridden, not
+ * parked. The model merges everything by material, so the stand is found as
+ * loose pieces (triangles that share vertices) inside `STAND_BOX`. Returns the
+ * number of triangles removed, for the fit report.
+ */
+function removeCentreStand(root: THREE.Object3D): number {
+  let removed = 0;
+  root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const geometry = mesh.geometry;
+    const index = geometry.getIndex();
+    const position = geometry.getAttribute("position");
+    if (!index || !position) return;
+
+    // Pieces: triangles joined through vertices at the same place.
+    const parent = new Int32Array(position.count).map((_, i) => i);
+    const find = (i: number): number => {
+      while (parent[i] !== i) {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+      }
+      return i;
+    };
+    const welded = new Map<string, number>();
+    for (let i = 0; i < position.count; i++) {
+      const key = `${Math.round(position.getX(i) * 1000)},${Math.round(position.getY(i) * 1000)},${Math.round(position.getZ(i) * 1000)}`;
+      const first = welded.get(key);
+      if (first === undefined) welded.set(key, i);
+      else parent[find(i)] = find(first);
+    }
+    for (let t = 0; t < index.count; t += 3) {
+      parent[find(index.getX(t))] = find(index.getX(t + 1));
+      parent[find(index.getX(t + 1))] = find(index.getX(t + 2));
+    }
+
+    const boxes = new Map<number, THREE.Box3>();
+    const point = new THREE.Vector3();
+    for (let t = 0; t < index.count; t++) {
+      const vertex = index.getX(t);
+      const key = find(vertex);
+      let box = boxes.get(key);
+      if (!box) boxes.set(key, (box = new THREE.Box3()));
+      box.expandByPoint(point.fromBufferAttribute(position, vertex));
+    }
+
+    const kept: number[] = [];
+    for (let t = 0; t < index.count; t += 3) {
+      const box = boxes.get(find(index.getX(t)));
+      if (box && STAND_BOX.containsBox(box)) removed++;
+      else kept.push(index.getX(t), index.getX(t + 1), index.getX(t + 2));
+    }
+    if (kept.length < index.count) geometry.setIndex(kept);
+  });
+  return removed;
+}
+
+/**
  * Splits the tank out of the body-paint mesh and tags both halves' materials
  * (`userData.tankPaint`) so each bike can paint tank and tail in its rider's
  * colour. The model merges tank, tail and rails under one material, so the
@@ -1204,6 +1271,7 @@ export function makeGltfBikeVisualsFactory(
   source: THREE.Object3D,
   fitting: BikeFitting,
 ): { factory: BikeVisualsFactory; report: BikeFitReport } {
+  removeCentreStand(source);
   splitTankPaint(source);
   source.updateMatrixWorld(true);
 
@@ -1329,19 +1397,6 @@ export function makeGltfBikeVisualsFactory(
         ? { object: assemblyObject, axis: prepared.steering.axis.clone() }
         : undefined;
 
-    // Six identical bikes are unreadable at racing distance, and the rider
-    // colour is how every other system (HUD, standings, debug) identifies
-    // them. The placeholder got that from its body colour; a real model keeps
-    // its own paint, so the identity moves to a marker above it instead.
-    const bounds = new THREE.Box3().setFromObject(body);
-    const identHeight = 0.28;
-    const ident = new THREE.Mesh(
-      new THREE.ConeGeometry(0.09, identHeight, 8),
-      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25 }),
-    );
-    ident.position.set(0, (Number.isFinite(bounds.max.y) ? bounds.max.y : 0) + identHeight, 0);
-    body.add(ident);
-
     return {
       body,
       wheels,
@@ -1349,8 +1404,7 @@ export function makeGltfBikeVisualsFactory(
       frontAssembly,
       dispose(): void {
         // Geometry and materials are shared with the prepared model, so they
-        // are deliberately NOT freed here — only the per-instance ident is owned.
-        disposeOwned(ident);
+        // are deliberately NOT freed here — only the per-instance tank paint is owned.
         tankMaterials.forEach((m) => m.dispose());
         body.removeFromParent();
         wheels.forEach((w) => w.removeFromParent());

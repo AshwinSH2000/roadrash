@@ -26,7 +26,7 @@ export interface HudStanding {
 export interface MinimapRider {
   x: number;
   z: number;
-  /** 0xRRGGBB — the same colour as the cone over their head, so the map and the world agree. */
+  /** 0xRRGGBB — the same colour as the rider's bike and jacket, so the map and the world agree. */
   color: number;
   isPlayer: boolean;
 }
@@ -462,7 +462,7 @@ export class HUD {
   }
 }
 
-/** 0xRRGGBB, the same numeric colour every rider's cone/bike paint already uses, as a canvas fill style. */
+/** 0xRRGGBB, the same numeric colour every rider's bike paint already uses, as a canvas fill style. */
 function cssColor(color: number): string {
   return `#${color.toString(16).padStart(6, "0")}`;
 }

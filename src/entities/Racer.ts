@@ -125,7 +125,9 @@ export class Racer {
       this.stuckSeconds = 0;
       return false;
     }
-    if (Math.abs(this.bike.forwardSpeed) > STUCK_SPEED) {
+    // Walking the bike backwards is slow but it is not stuck: only a bike that
+    // is really sitting still gets rescued.
+    if (Math.abs(this.bike.forwardSpeed) > STUCK_SPEED || this.bike.controller.reversing) {
       this.stuckSeconds = 0;
       return false;
     }

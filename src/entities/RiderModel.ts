@@ -49,8 +49,8 @@ const PADDLE_FRONT = 0.0;
 const PADDLE_BACK = -0.5;
 const PADDLE_LIFT = 0.14;
 /** Head turned over the shoulder to look behind while reversing, radians. */
-const REVERSE_HEAD_TURN = 0.85;
-const REVERSE_TORSO_TWIST = 0.3;
+const REVERSE_HEAD_TURN = 1.25;
+const REVERSE_TORSO_TWIST = 0.45;
 /** Torso shift toward the planted foot at a standstill. */
 const IDLE_SWAY = 0.5;
 

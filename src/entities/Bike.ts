@@ -334,10 +334,12 @@ export class Bike {
   }
 
   private readonly drawnSuspension: [number, number] = [0.45, 0.45];
+  private readonly tmpMount = new THREE.Vector3();
 
   /** Reads the wheel centres, spin and steer from the physics into the "current" slots. */
   private captureWheels(): void {
     this.tmpDown.copy(LOCAL_DOWN).applyQuaternion(this.currQuat);
+    const tuning = this.controller.tuning;
     for (let i = 0; i < 2; i++) {
       const index = i as 0 | 1;
       const hardPoint = this.controller.wheelHardPoint(index);
@@ -349,8 +351,16 @@ export class Bike {
         this.drawnSuspension[i] = this.controller.currentLoopRide
           ? this.drawnSuspension[i] + (length - this.drawnSuspension[i]) * 0.2
           : length;
+        // The wheel hangs from its mount on the chassis. The vehicle's own hard
+        // point is where that mount was when the rays were cast, before the
+        // step moved the chassis, so it is a whole step behind the body (0.6 m
+        // at 130 km/h) and the wheels would trail it. Work from the chassis as
+        // it is now instead.
+        const mount = this.tmpMount.set(0, -tuning.chassisHalfExtents.y, (index === 0 ? 0.5 : -0.5) * tuning.wheelBase);
         this.currWheelCenters[i]
-          .copy(hardPoint)
+          .copy(mount)
+          .applyQuaternion(this.currQuat)
+          .add(this.currPos)
           .addScaledVector(this.tmpDown, this.drawnSuspension[i]);
       }
       this.currWheelSpin[i] = this.controller.wheelRotation(index);

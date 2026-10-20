@@ -378,6 +378,9 @@ function buildBackgroundProps(
   return group;
 }
 
+/** Half-width, in radians, of the backdrop sector kept clear of peaks beyond the finish line. */
+const PEAK_FINISH_CLEARANCE = 0.6;
+
 /**
  * A distant, always-on ring of low-poly peaks around the whole course, so the
  * horizon has something other than flat sky past the ground fill — separate
@@ -432,8 +435,22 @@ function buildMountainBackdrop(
   const quaternion = new THREE.Quaternion();
   const scale = new THREE.Vector3();
 
+  // A peak dead ahead of the finish line would sit on top of the road from
+  // the rider's view; keep a clear sector in the finish direction.
+  const finishU = track.finishDistance / track.totalLength;
+  const finishPoint = track.curve.getPointAt(finishU);
+  const finishHeading = track.curve.getTangentAt(finishU);
+  const clearAngle = Math.atan2(
+    finishPoint.z + finishHeading.z * radius - centerZ,
+    finishPoint.x + finishHeading.x * radius - centerX,
+  );
+
+  let placed = 0;
   for (let i = 0; i < peakCount; i++) {
     const angle = (i / peakCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.15;
+    let off = Math.abs(angle - clearAngle) % (Math.PI * 2);
+    if (off > Math.PI) off = Math.PI * 2 - off;
+    if (off < PEAK_FINISH_CLEARANCE) continue;
     const r = radius * (0.9 + Math.random() * 0.3);
     position.set(centerX + Math.cos(angle) * r, lowestY - 20, centerZ + Math.sin(angle) * r);
     quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI * 2);
@@ -441,8 +458,9 @@ function buildMountainBackdrop(
     const height = 180 + Math.random() * 260;
     scale.set(width, height, width);
     matrix.compose(position, quaternion, scale);
-    peaks.setMatrixAt(i, matrix);
+    peaks.setMatrixAt(placed++, matrix);
   }
+  peaks.count = placed;
   peaks.instanceMatrix.needsUpdate = true;
   group.add(peaks);
 

@@ -268,7 +268,7 @@ const DRAG_RACE = new TrackRecipe()
  */
 export const LOOP_RADIUS = 16;
 export const LOOP_ADVANCE = 16;
-export const LOOP_SHIFT = 22;
+export const LOOP_SHIFT = 16;
 
 const DAREDEVIL = new TrackRecipe()
   .straight(240, 0)

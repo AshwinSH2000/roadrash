@@ -42,6 +42,11 @@ const FIRING_HZ_REDLINE = 210;
 const FILTER_HZ_CLOSED = 320;
 const FILTER_HZ_OPEN = 3200;
 
+/** Gain on the effects bus relative to the engine mix, which is left untouched. */
+const SFX_BOOST = 2.6;
+/** Extra gain on kick, punch, fall and screech over the rest of the effects bus. */
+const COMBAT_BOOST = 3;
+
 /** Seconds for a parameter to approach a new value — long enough to avoid zipper noise. */
 const PARAM_GLIDE = 0.03;
 
@@ -76,6 +81,11 @@ export class EngineAudio {
   private readonly biteGain: GainNode | null = null;
   private readonly windGain: GainNode | null = null;
   private readonly windFilter: BiquadFilterNode | null = null;
+  /** Bus for kick/punch/fall/victory/screech: boosted above the engine, through a limiter so the boost can't clip. */
+  private readonly sfxBus: GainNode | null = null;
+  private readonly combatBus: GainNode | null = null;
+  private readonly skidGain: GainNode | null = null;
+  private readonly skidFilter: BiquadFilterNode | null = null;
 
   private started = false;
   private volume = 0.2;
@@ -161,6 +171,33 @@ export class EngineAudio {
     noise.loop = true;
     noise.connect(this.windFilter);
     noise.start();
+
+    this.sfxBus = context.createGain();
+    this.sfxBus.gain.value = SFX_BOOST;
+    const limiter = context.createDynamicsCompressor();
+    limiter.threshold.value = 0;
+    limiter.knee.value = 4;
+    limiter.ratio.value = 6;
+    this.sfxBus.connect(limiter).connect(this.master);
+    this.combatBus = context.createGain();
+    this.combatBus.gain.value = COMBAT_BOOST;
+    this.combatBus.connect(this.sfxBus);
+
+    // --- tyre screech: looped noise through a narrow band-pass, silent until `setSkid` ---
+    this.skidFilter = context.createBiquadFilter();
+    this.skidFilter.type = "bandpass";
+    this.skidFilter.frequency.value = 1500;
+    this.skidFilter.Q.value = 7;
+
+    this.skidGain = context.createGain();
+    this.skidGain.gain.value = 0;
+    this.skidFilter.connect(this.skidGain).connect(this.combatBus);
+
+    const skidNoise = context.createBufferSource();
+    skidNoise.buffer = createNoiseBuffer(context);
+    skidNoise.loop = true;
+    skidNoise.connect(this.skidFilter);
+    skidNoise.start();
 
     this.installGestureUnlock();
   }
@@ -352,6 +389,228 @@ export class EngineAudio {
     source.connect(filter).connect(gain).connect(this.master);
     source.start(now);
     source.stop(now + 0.25);
+  }
+
+  /**
+   * Tyre screech while braking hard or sliding. `intensity` is 0..1; 0 fades
+   * it out. Pitch rises a little with intensity, and a slow wobble keeps the
+   * noise from sounding like a steady hiss.
+   */
+  setSkid(intensity: number): void {
+    const context = this.context;
+    if (!context || !this.skidGain || !this.skidFilter || context.state !== "running") return;
+    const level = clamp01(intensity);
+    const now = context.currentTime;
+    this.skidGain.gain.setTargetAtTime(level * 0.16, now, level > 0 ? 0.03 : 0.08);
+    this.skidFilter.frequency.setTargetAtTime(1300 + level * 700 + Math.sin(now * 23) * 90, now, 0.02);
+  }
+
+  /** Kick: a heavier thud with a low body and a short dull slap. `gain` is 0..1, for distance falloff. */
+  playKick(gain = 1): void {
+    this.playThump(gain, 95, 0.5, 700, 0.3);
+  }
+
+  /** Punch: a snappier, higher, shorter smack. */
+  playPunch(gain = 1): void {
+    this.playThump(gain, 150, 0.34, 1800, 0.14);
+  }
+
+  /** A low sine drop (the body) under a short filtered noise burst (the slap). */
+  private playThump(gain: number, bodyHz: number, peak: number, slapHz: number, seconds: number): void {
+    const context = this.context;
+    if (!context || !this.combatBus || context.state !== "running" || gain <= 0.01) return;
+    const now = context.currentTime;
+
+    const body = context.createOscillator();
+    body.type = "sine";
+    body.frequency.setValueAtTime(bodyHz * 1.8, now);
+    body.frequency.exponentialRampToValueAtTime(bodyHz * 0.5, now + seconds);
+    const bodyGain = context.createGain();
+    bodyGain.gain.setValueAtTime(peak * gain, now);
+    bodyGain.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
+    body.connect(bodyGain).connect(this.combatBus);
+    body.start(now);
+    body.stop(now + seconds + 0.02);
+
+    const slap = context.createBufferSource();
+    slap.buffer = createNoiseBuffer(context);
+    const slapFilter = context.createBiquadFilter();
+    slapFilter.type = "bandpass";
+    slapFilter.frequency.value = slapHz;
+    slapFilter.Q.value = 0.9;
+    const slapGain = context.createGain();
+    slapGain.gain.setValueAtTime(peak * 0.9 * gain, now);
+    slapGain.gain.exponentialRampToValueAtTime(0.0001, now + seconds * 0.5);
+    slap.connect(slapFilter).connect(slapGain).connect(this.combatBus);
+    slap.start(now);
+    slap.stop(now + seconds * 0.5 + 0.02);
+  }
+
+  /**
+   * A rider tumbling along the road. Real body impacts are dull and noisy,
+   * not tonal, so each one is a low-passed noise burst (the soft-body slap)
+   * over a short low "thump" with only a small pitch drop. They come at
+   * uneven, shortening gaps and fade as the body loses energy, with every
+   * pitch and level randomised per fall so no two sound alike. A quiet cloth
+   * and gravel drag runs underneath.
+   */
+  playFall(gain = 1, delay = 0.1): void {
+    const context = this.context;
+    if (!context || !this.combatBus || context.state !== "running" || gain <= 0.01) return;
+    const rand = (min: number, max: number): number => min + Math.random() * (max - min);
+
+    let t = context.currentTime + delay;
+    let energy = 1;
+    let gap = rand(0.2, 0.3);
+    const bounces = 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < bounces; i++) {
+      const level = energy * gain;
+
+      const slap = context.createBufferSource();
+      slap.buffer = createNoiseBuffer(context);
+      const slapFilter = context.createBiquadFilter();
+      slapFilter.type = "lowpass";
+      slapFilter.frequency.value = rand(300, 700) * (0.6 + energy * 0.4);
+      const slapGain = context.createGain();
+      slapGain.gain.setValueAtTime(0.0001, t);
+      slapGain.gain.linearRampToValueAtTime(0.55 * level, t + 0.006);
+      slapGain.gain.exponentialRampToValueAtTime(0.0001, t + rand(0.09, 0.15));
+      slap.connect(slapFilter).connect(slapGain).connect(this.combatBus);
+      slap.start(t, Math.random());
+      slap.stop(t + 0.18);
+
+      const hz = rand(55, 90);
+      const thump = context.createOscillator();
+      thump.type = "sine";
+      thump.frequency.setValueAtTime(hz * 1.25, t);
+      thump.frequency.exponentialRampToValueAtTime(hz, t + 0.07);
+      const thumpGain = context.createGain();
+      thumpGain.gain.setValueAtTime(0.0001, t);
+      thumpGain.gain.linearRampToValueAtTime(0.4 * level, t + 0.008);
+      thumpGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+      thump.connect(thumpGain).connect(this.combatBus);
+      thump.start(t);
+      thump.stop(t + 0.14);
+
+      t += gap;
+      gap *= rand(0.65, 0.85);
+      energy *= rand(0.5, 0.7);
+    }
+
+    const drag = context.createBufferSource();
+    drag.buffer = createNoiseBuffer(context);
+    const dragFilter = context.createBiquadFilter();
+    dragFilter.type = "bandpass";
+    dragFilter.frequency.setValueAtTime(900, context.currentTime + delay);
+    dragFilter.frequency.exponentialRampToValueAtTime(350, t + 0.3);
+    dragFilter.Q.value = 0.7;
+    const dragGain = context.createGain();
+    dragGain.gain.setValueAtTime(0.0001, context.currentTime + delay);
+    dragGain.gain.linearRampToValueAtTime(0.1 * gain, context.currentTime + delay + 0.1);
+    dragGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+    drag.connect(dragFilter).connect(dragGain).connect(this.combatBus);
+    drag.start(context.currentTime + delay, Math.random());
+    drag.stop(t + 0.32);
+  }
+
+  /** Air swish for a strike swinging, hit or miss: band-passed noise that rises then falls. A kick is lower and longer than a punch. */
+  playWhoosh(isKick: boolean, gain = 1): void {
+    const context = this.context;
+    if (!context || !this.combatBus || context.state !== "running" || gain <= 0.01) return;
+    const now = context.currentTime;
+    const seconds = isKick ? 0.26 : 0.18;
+    const centre = isKick ? 700 : 1200;
+
+    const source = context.createBufferSource();
+    source.buffer = createNoiseBuffer(context);
+    const filter = context.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.Q.value = 1.1;
+    filter.frequency.setValueAtTime(centre * 0.6, now);
+    filter.frequency.exponentialRampToValueAtTime(centre * 1.6, now + seconds * 0.55);
+    filter.frequency.exponentialRampToValueAtTime(centre * 0.8, now + seconds);
+    const env = context.createGain();
+    env.gain.setValueAtTime(0.0001, now);
+    env.gain.linearRampToValueAtTime(0.3 * gain, now + seconds * 0.5);
+    env.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
+    source.connect(filter).connect(env).connect(this.combatBus);
+    source.start(now, Math.random());
+    source.stop(now + seconds + 0.02);
+  }
+
+  /** Victory fanfare: a rising major arpeggio ending on a held chord, then a cheer-like noise swell. */
+  playVictory(): void {
+    const context = this.context;
+    if (!context || !this.sfxBus || context.state !== "running") return;
+    const now = context.currentTime;
+
+    // C5 E5 G5 C6, then C major held.
+    const notes: [number, number, number][] = [
+      [523.25, 0, 0.14],
+      [659.25, 0.13, 0.14],
+      [783.99, 0.26, 0.14],
+      [1046.5, 0.39, 0.9],
+      [659.25, 0.39, 0.9],
+      [783.99, 0.39, 0.9],
+    ];
+    for (const [hz, offset, length] of notes) {
+      const t = now + offset;
+      const osc = context.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.value = hz;
+      const env = context.createGain();
+      env.gain.setValueAtTime(0.0001, t);
+      env.gain.linearRampToValueAtTime(0.16, t + 0.02);
+      env.gain.setValueAtTime(0.16, t + length * 0.6);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + length + 0.25);
+      osc.connect(env).connect(this.sfxBus);
+      osc.start(t);
+      osc.stop(t + length + 0.3);
+    }
+
+    const cheer = context.createBufferSource();
+    cheer.buffer = createNoiseBuffer(context);
+    const cheerFilter = context.createBiquadFilter();
+    cheerFilter.type = "bandpass";
+    cheerFilter.frequency.value = 1800;
+    cheerFilter.Q.value = 0.6;
+    const cheerGain = context.createGain();
+    cheerGain.gain.setValueAtTime(0.0001, now + 0.35);
+    cheerGain.gain.linearRampToValueAtTime(0.1, now + 0.6);
+    cheerGain.gain.exponentialRampToValueAtTime(0.0001, now + 2.0);
+    cheer.connect(cheerFilter).connect(cheerGain).connect(this.sfxBus);
+    cheer.start(now + 0.35);
+    cheer.stop(now + 2.05);
+  }
+
+  /** Start-light amber: three short beeps. */
+  playBlip(): void {
+    for (let i = 0; i < 3; i++) this.playBeep(880, 0.12, i * 0.6);
+  }
+
+  /** Start-light green: one long, higher beep. */
+  playGoBeep(): void {
+    this.playBeep(1320, 0.8);
+  }
+
+  private playBeep(hz: number, seconds: number, delay = 0): void {
+    const context = this.context;
+    if (!context || !this.sfxBus || context.state !== "running") return;
+    const now = context.currentTime + delay;
+    const osc = context.createOscillator();
+    osc.type = "square";
+    osc.frequency.value = hz;
+    const filter = context.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = hz * 3;
+    const env = context.createGain();
+    env.gain.setValueAtTime(0.0001, now);
+    env.gain.linearRampToValueAtTime(0.1, now + 0.008);
+    env.gain.setValueAtTime(0.1, now + seconds - 0.03);
+    env.gain.linearRampToValueAtTime(0.0001, now + seconds);
+    osc.connect(filter).connect(env).connect(this.sfxBus);
+    osc.start(now);
+    osc.stop(now + seconds + 0.02);
   }
 
   dispose(): void {

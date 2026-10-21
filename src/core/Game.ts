@@ -143,6 +143,9 @@ export class Game {
   /** Seconds each racer's wheels have been in the river, for putting them back on the road. */
   private readonly waterSeconds = new Map<Racer, number>();
   private animationClock = 0;
+  private lastStartLight = "off";
+  /** Whether each rider's strike was in its active phase last frame, to sound the swing once. */
+  private readonly wasSwinging = new Map<Racer, boolean>();
 
   private finishedCount = 0;
   /**
@@ -854,6 +857,11 @@ export class Game {
   /** Reports a landed hit — a sound, and a line in the console for tuning. */
   private onHit(hit: HitEvent): void {
     this.engineAudio.playImpact(hit.impulse / ATTACKS[hit.kind].knockback);
+    // Quieter the further the fight is from the player's bike.
+    const gain = Math.max(0, 1 - hit.victim.bike.worldPosition.distanceTo(this.player.bike.worldPosition) / 60);
+    if (hit.kind === AttackKind.KICK) this.engineAudio.playKick(gain);
+    else this.engineAudio.playPunch(gain);
+    this.engineAudio.playFall(gain);
     console.log(
       `[${hit.attacker.isPlayer ? "Phase 6" : "Phase 7"}] ${hit.attacker.name} ${hit.kind}ed ${hit.victim.name} off ` +
         `(impulse ${hit.impulse.toFixed(0)}, closing ${hit.closingSpeed.toFixed(1)} m/s).`,
@@ -864,6 +872,12 @@ export class Game {
   private syncStrikeVisuals(): void {
     for (const racer of this.racers) {
       const snapshot = this.combat.snapshot(racer);
+      const swinging = snapshot.phase === AttackPhase.ACTIVE && snapshot.kind !== null;
+      if (swinging && !this.wasSwinging.get(racer) && snapshot.kind !== null) {
+        const gain = Math.max(0, 1 - racer.bike.worldPosition.distanceTo(this.player.bike.worldPosition) / 60);
+        this.engineAudio.playWhoosh(snapshot.kind === AttackKind.KICK, gain);
+      }
+      this.wasSwinging.set(racer, swinging);
       if (snapshot.phase === AttackPhase.IDLE || snapshot.kind === null) {
         racer.rider.setAttack(null, 0, 0, ATTACKS[AttackKind.PUNCH]);
         continue;
@@ -932,6 +946,7 @@ export class Game {
     // screen instead of carrying on with a ghost at the controls.
     if (result === RaceResult.DNF) this.player.driver = new BrakeToStopDriver(this.player.bike);
     this.endScreenTimer = END_SCREEN_DELAY;
+    if (result === RaceResult.WIN) this.engineAudio.playVictory();
     console.log(
       `[Phase 8] race over: ${result} — P${this.flow.position} of ${this.racers.length} ` +
         `at ${this.flow.raceElapsed.toFixed(2)}s.`,
@@ -1136,9 +1151,14 @@ export class Game {
     this.builtTrack.animate(this.animationClock);
     // The traffic light by the start line: red, then amber for the last two seconds, then green.
     const phaseNow = this.flow.current;
-    this.builtTrack.setStartLight(
-      phaseNow === RacePhase.COUNTDOWN ? (this.flow.countdown > 2 ? "red" : "yellow") : phaseNow === RacePhase.RACING ? "green" : "off",
-    );
+    const light =
+      phaseNow === RacePhase.COUNTDOWN ? (this.flow.countdown > 2 ? "red" : "yellow") : phaseNow === RacePhase.RACING ? "green" : "off";
+    this.builtTrack.setStartLight(light);
+    if (light !== this.lastStartLight) {
+      if (light === "yellow") this.engineAudio.playBlip();
+      else if (light === "green" && this.lastStartLight === "yellow") this.engineAudio.playGoBeep();
+      this.lastStartLight = light;
+    }
     focusSunOn(this.sunLight, this.player.rider.cameraPosition);
     positionSkyDome(this.skyDome, this.camera.position);
     this.syncStrikeVisuals();
@@ -1164,6 +1184,7 @@ export class Game {
     const controller = this.player.bike.controller;
     if (!this.player.rider.isRiding) {
       this.engineAudio.update(0, 0, 0);
+      this.engineAudio.setSkid(0);
       return;
     }
     const speedRatio = Math.abs(this.player.bike.forwardSpeed) / controller.tuning.topSpeedEstimate;
@@ -1173,5 +1194,16 @@ export class Game {
       speedRatio,
       controller.gear,
     );
+
+    // Screech on a hard stop (brake held while still moving fast) or a slide.
+    const braking = Math.max(0, -controller.debugInputs.throttle);
+    const speed = Math.abs(this.player.bike.forwardSpeed);
+    const hardStop = braking > 0.6 && controller.forwardSpeed > 8 ? braking * clamp01Audio((speed - 8) / 20) : 0;
+    const slide = controller.isDrifting || Math.abs(controller.slipAngle) > 0.25 ? clamp01Audio(speed / 15) : 0;
+    this.engineAudio.setSkid(Math.max(hardStop, slide));
   }
+}
+
+function clamp01Audio(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }

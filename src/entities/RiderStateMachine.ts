@@ -2,7 +2,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { PhysicsWorld } from "../physics/PhysicsWorld";
 import { RagdollController } from "../physics/RagdollController";
-import { GROUPS_RIDER, GROUPS_WHEEL_RAY } from "../physics/CollisionGroups";
+import { GROUPS_RIDER, GROUPS_TRAFFIC_FEELER, GROUPS_WHEEL_RAY } from "../physics/CollisionGroups";
 import { LOCAL_FORWARD, LOCAL_UP, WORLD_UP } from "../utils/Directions";
 import type { Bike } from "./Bike";
 import type { RiderCharacter } from "./RiderCharacter";
@@ -59,6 +59,10 @@ const UPRIGHT_CHASSIS_HEIGHT = 1.02;
 
 /** How fast a rider runs on foot, in m/s — a jog, deliberately slower than any bike. */
 const RUN_SPEED = 5.2;
+/** How far ahead, in metres, the runner looks for a vehicle in the way. */
+const TRAFFIC_FEELER = 1.6;
+/** Seconds the runner keeps sidestepping after the vehicle stops being in the way, so they clear its corner instead of turning back into it. */
+const DETOUR_HOLD_SECONDS = 0.5;
 /**
  * Give up chasing the bike after this long and remount wherever it is. The
  * race cannot proceed with a rider permanently on foot, and a bike that ends
@@ -89,6 +93,9 @@ export class RiderStateMachine {
   private runAmplitude = 0;
   /** 0..1: how much of full stride the runner is moving at; eases down on the approach to the bike. */
   private runSpeedFraction = 1;
+  /** Which way the runner is walking around a vehicle in the way: -1 or 1 along the run direction's right, 0 for none. */
+  private detourSide = 0;
+  private detourTimer = 0;
   /** The lift of the fallen bike: where it was, and where it ends up, standing. */
   private lifting = false;
   private readonly liftStartPos = new THREE.Vector3();
@@ -227,7 +234,7 @@ export class RiderStateMachine {
         if (this.timer >= RUN_TIMEOUT_SECONDS) {
           // Out of time (the bike is somewhere unreachable): skip the show and remount.
           this.finishMount();
-        } else if (this.runTowardBike()) {
+        } else if (this.runTowardBike(dtSeconds)) {
           this.beginPickUp();
         }
         break;
@@ -314,7 +321,7 @@ export class RiderStateMachine {
   }
 
   /** Drives the runner toward the bike's pickup spot. Returns true once there, with the bike nearly still. */
-  private runTowardBike(): boolean {
+  private runTowardBike(dtSeconds: number): boolean {
     const body = this.runnerBody;
     if (!body) return true;
 
@@ -333,7 +340,11 @@ export class RiderStateMachine {
     // can't accumulate momentum and overshoot the spot. Slows over the last
     // metre so the rider settles beside the bike instead of skidding to a halt.
     this.runSpeedFraction = THREE.MathUtils.clamp(distance / 1.2, 0.3, 1);
-    if (distance > 1e-3) this.tmpToBike.multiplyScalar((RUN_SPEED * this.runSpeedFraction) / distance);
+    if (distance > 1e-3) {
+      this.tmpToBike.divideScalar(distance);
+      this.steerAroundTraffic(t, this.tmpToBike, dtSeconds);
+      this.tmpToBike.multiplyScalar(RUN_SPEED * this.runSpeedFraction);
+    }
     const v = body.linvel();
     body.setLinvel({ x: this.tmpToBike.x, y: v.y, z: this.tmpToBike.z }, true);
 
@@ -341,6 +352,39 @@ export class RiderStateMachine {
     const heading = Math.atan2(this.tmpToBike.x, this.tmpToBike.z);
     if (distance > 0.05) this.setRunnerYaw(heading);
     return false;
+  }
+
+  /**
+   * Bends `direction` (a flat unit vector toward the bike) around a traffic
+   * vehicle in the way. Vehicles are immovable, so running straight at one
+   * goes nowhere; the runner instead looks a short way ahead and, on seeing
+   * one, walks along its side — the side they are already nearer, picked once
+   * and kept until they are clear of it.
+   */
+  private steerAroundTraffic(position: { x: number; y: number; z: number }, direction: THREE.Vector3, dtSeconds: number): void {
+    const hit = this.physics.world.castRay(
+      new RAPIER.Ray({ x: position.x, y: position.y, z: position.z }, { x: direction.x, y: 0, z: direction.z }),
+      TRAFFIC_FEELER,
+      true,
+      undefined,
+      GROUPS_TRAFFIC_FEELER,
+    );
+    if (hit) {
+      if (this.detourSide === 0) {
+        const car = hit.collider.translation();
+        // Right of the run direction; positive if the runner is on that side of the vehicle's centre.
+        const side = (position.x - car.x) * direction.z - (position.z - car.z) * direction.x;
+        this.detourSide = side >= 0 ? 1 : -1;
+      }
+      this.detourTimer = DETOUR_HOLD_SECONDS;
+    } else if (this.detourTimer > 0) {
+      this.detourTimer -= dtSeconds;
+    } else {
+      this.detourSide = 0;
+    }
+    if (this.detourSide === 0) return;
+    // Mostly sideways, a little forward so they slide along the body rather than push into it.
+    direction.set(direction.z * this.detourSide + direction.x * 0.3, 0, -direction.x * this.detourSide + direction.z * 0.3).normalize();
   }
 
   private setRunnerYaw(yaw: number): void {

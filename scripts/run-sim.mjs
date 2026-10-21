@@ -53,6 +53,7 @@ const entries = {
   mountains: "mountain-probe.ts",
   scenery: "scenery-probe.ts",
   ridercharacter: "rider-character-probe.ts",
+  jump: "jump-probe.ts",
 };
 const entry = entries[which];
 if (!entry) {

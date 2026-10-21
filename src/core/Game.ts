@@ -86,6 +86,13 @@ const END_SCREEN_DELAY = 1.2;
  * that the rider's own momentum is what dominates.
  */
 const DEBUG_KNOCKDOWN_IMPULSE = 250;
+/**
+ * Speed the B-key jump knocks the rider off at, in m/s: 245 km/h, the peak
+ * speed in the Drag Race telemetry log where X was pressed just before the
+ * finish line. The ragdoll inherits the bike's velocity, so speed is what
+ * makes that tumble so violent.
+ */
+const DEBUG_JUMP_SPEED = 245 / 3.6;
 
 export class Game {
   private readonly scene: THREE.Scene;
@@ -821,6 +828,22 @@ export class Game {
   }
 
   /**
+   * B: the full-speed knockdown from the Drag Race log, from any point in a
+   * race. Snaps the bike to `DEBUG_JUMP_SPEED` along its heading, then
+   * applies the same sideways-and-up knock as X, so the tumble is the one a
+   * 245 km/h knockdown produces whatever speed the bike was really doing.
+   */
+  private debugBigJump(racer: Racer | null): void {
+    if (!racer || !racer.rider.isRiding) return;
+    const body = racer.bike.controller.chassisBody;
+    const heading = this.tmpKnock.copy(LOCAL_FORWARD).applyQuaternion(racer.bike.worldQuaternion);
+    heading.y = 0;
+    heading.normalize().multiplyScalar(DEBUG_JUMP_SPEED);
+    body.setLinvel({ x: heading.x, y: body.linvel().y, z: heading.z }, true);
+    this.debugKnockDown(racer);
+  }
+
+  /**
    * Debug-only knockdown, so the fall/recovery cycle can be exercised before
    * combat exists to trigger it. Sideways-and-up, which is what a punch from
    * an adjacent rider will produce in the next phase.
@@ -1071,6 +1094,7 @@ export class Game {
       if (this.input.wasJustPressed("KeyT")) this.toggleTransmissionMode();
       if (this.input.wasJustPressed("KeyC")) this.hud.showCameraMode(CAMERA_LABELS[this.cameraRig.cycle()]);
       if (this.input.wasJustPressed("KeyX")) this.debugKnockDown(this.player);
+      if (this.input.wasJustPressed("KeyB")) this.debugBigJump(this.player);
       if (this.input.wasJustPressed("KeyZ")) this.debugKnockDown(this.nearestOpponent());
       if (this.input.wasJustPressed("KeyM")) this.telemetry?.mark();
       if (import.meta.env.DEV && this.input.wasJustPressed("KeyH")) this.hud.toggleDebug();

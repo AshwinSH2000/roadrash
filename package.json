@@ -26,7 +26,8 @@
     "sim:replay": "node scripts/run-sim.mjs replay",
     "sim:profile": "node scripts/run-sim.mjs profile",
     "sim:climb": "node scripts/run-sim.mjs climb",
-    "sim:manual": "node scripts/run-sim.mjs manual"
+    "sim:manual": "node scripts/run-sim.mjs manual",
+    "sim:jump": "node scripts/run-sim.mjs jump"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

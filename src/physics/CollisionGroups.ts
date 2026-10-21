@@ -24,6 +24,7 @@ export const LAYER_TERRAIN = 1 << 0;
 export const LAYER_BIKE = 1 << 1;
 export const LAYER_RIDER = 1 << 2;
 export const LAYER_WALL = 1 << 3;
+export const LAYER_TRAFFIC = 1 << 4;
 
 /** Packs membership and filter into Rapier's `InteractionGroups` encoding. */
 export function interactionGroups(membership: number, filter: number): number {
@@ -37,7 +38,16 @@ export const GROUPS_TERRAIN = interactionGroups(
 );
 
 /** Bike chassis: the ground, other bikes, and the world-boundary wall. Deliberately not riders. */
-export const GROUPS_BIKE = interactionGroups(LAYER_BIKE, LAYER_TERRAIN | LAYER_BIKE | LAYER_WALL);
+export const GROUPS_BIKE = interactionGroups(
+  LAYER_BIKE,
+  LAYER_TERRAIN | LAYER_BIKE | LAYER_WALL | LAYER_TRAFFIC,
+);
+
+/** A bike that traffic passes through — the bots', on a course with traffic, which they have no way of avoiding. */
+export const GROUPS_BIKE_GHOST = interactionGroups(LAYER_BIKE, LAYER_TERRAIN | LAYER_BIKE | LAYER_WALL);
+
+/** Traffic cars and bikes: kinematic, so they push a bike or a tumbling rider and are never pushed back. */
+export const GROUPS_TRAFFIC = interactionGroups(LAYER_TRAFFIC, LAYER_BIKE | LAYER_RIDER);
 
 /**
  * Ragdoll limbs and riders on foot: the ground, and nothing else.
@@ -58,7 +68,7 @@ export const GROUPS_BIKE = interactionGroups(LAYER_BIKE, LAYER_TERRAIN | LAYER_B
  * Also collides with the world-boundary wall, so a ragdoll flung sideways
  * off a fall stops at the wall rather than tumbling through it into the void.
  */
-export const GROUPS_RIDER = interactionGroups(LAYER_RIDER, LAYER_TERRAIN | LAYER_WALL);
+export const GROUPS_RIDER = interactionGroups(LAYER_RIDER, LAYER_TERRAIN | LAYER_WALL | LAYER_TRAFFIC);
 
 /**
  * The finish line. Only bikes trip it — a rider tumbling across the line on
@@ -86,3 +96,6 @@ export const GROUPS_WHEEL_RAY = interactionGroups(LAYER_BIKE, LAYER_TERRAIN);
  * bodies to interact) and not the wheel raycast (see above).
  */
 export const GROUPS_WALL = interactionGroups(LAYER_WALL, LAYER_BIKE | LAYER_RIDER);
+
+/** What the on-foot rider's forward look for a vehicle in the way is allowed to hit: traffic only. */
+export const GROUPS_TRAFFIC_FEELER = interactionGroups(LAYER_RIDER, LAYER_TRAFFIC);

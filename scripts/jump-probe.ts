@@ -13,7 +13,8 @@ import { LOCAL_FORWARD, LOCAL_RIGHT, WORLD_UP } from "../src/utils/Directions";
  * the rider's height every 0.1 s, to compare against a telemetry log of the
  * debug knockdown at full speed.
  *
- *   npm run sim:jump -- 245
+ *   npm run sim:jump -- 245          knockdown at 245 km/h
+ *   npm run sim:jump -- 130 launch   the J-key jump at 130 km/h
  */
 const KNOCK_IMPULSE = 250;
 const targetKph = Number(process.argv[3] ?? 245);
@@ -54,7 +55,11 @@ const impulse = new THREE.Vector3()
   .multiplyScalar(KNOCK_IMPULSE)
   .addScaledVector(WORLD_UP, KNOCK_IMPULSE * 0.35);
 const startPos = bike.worldPosition.clone();
-rider.knockOff(impulse);
+if (process.argv[4] === "launch") {
+  // The J-key jump: straight up at 13 m/s, forward speed kept.
+  const v = bike.controller.chassisBody.linvel();
+  bike.controller.chassisBody.setLinvel({ x: v.x, y: 13, z: v.z }, true);
+} else rider.knockOff(impulse);
 for (let i = 0; i < 90; i++) {
   step(0);
   if (i % 6 === 5) {

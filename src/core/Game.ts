@@ -52,6 +52,8 @@ import {
   type BikeFitting,
   type BikeVisualsFactory,
 } from "../entities/BikeVisuals";
+import { Traffic, CRASH_CLOSING_KPH, type ImpactReport } from "../entities/Traffic";
+import { GROUPS_BIKE_GHOST } from "../physics/CollisionGroups";
 import { LOCAL_FORWARD, LOCAL_RIGHT, WORLD_UP } from "../utils/Directions";
 
 /**
@@ -85,6 +87,8 @@ const END_SCREEN_DELAY = 1.2;
  * about how fast the bike had been going. The impulse must stay small enough
  * that the rider's own momentum is what dominates.
  */
+/** The only course with traffic. */
+const TRAFFIC_COURSE = "Drag Race";
 const DEBUG_KNOCKDOWN_IMPULSE = 250;
 /**
  * Speed the B-key jump knocks the rider off at, in m/s: 245 km/h, the peak
@@ -93,6 +97,12 @@ const DEBUG_KNOCKDOWN_IMPULSE = 250;
  * makes that tumble so violent.
  */
 const DEBUG_JUMP_SPEED = 245 / 3.6;
+/**
+ * Upward launch speed of the J-key jump, in m/s. Read off a telemetry log
+ * where a bike was thrown into the air by a collision: it rose from 1.4 m to
+ * 9.7 m and stayed up for 2.7 s, which is a 13 m/s launch under gravity.
+ */
+const BIKE_JUMP_SPEED = 13;
 
 export class Game {
   private readonly scene: THREE.Scene;
@@ -150,6 +160,8 @@ export class Game {
   /** Seconds each racer's wheels have been in the river, for putting them back on the road. */
   private readonly waterSeconds = new Map<Racer, number>();
   private animationClock = 0;
+  /** Cars, trucks and motorbikes on the drag strip; null on every other course. */
+  private readonly traffic: Traffic | null;
   private lastStartLight = "off";
   /** Whether each rider's strike was in its active phase last frame, to sound the swing once. */
   private readonly wasSwinging = new Map<Racer, boolean>();
@@ -237,6 +249,14 @@ export class Game {
     this.input = new InputManager();
     this.mobileInput = new MobileInputManager();
     this.player = this.createField();
+    this.traffic = layout.name === TRAFFIC_COURSE ? new Traffic(this.physics, this.scene, this.track) : null;
+    if (this.traffic) {
+      // Only the player's bike is solid to traffic; the bots can't dodge it.
+      for (const racer of this.racers) {
+        if (!racer.isPlayer) racer.bike.controller.chassisCollider.setCollisionGroups(GROUPS_BIKE_GHOST);
+      }
+      console.info(`[traffic] ${this.traffic.count} vehicles on "${layout.name}", crash above ${CRASH_CLOSING_KPH} km/h closing.`);
+    }
     this.player.bike.controller.setTransmissionMode(choice.transmission);
 
     // Drivers are assigned only once every racer exists, because the AI needs
@@ -828,6 +848,20 @@ export class Game {
   }
 
   /**
+   * J: launches the bike (and rider) into the air, keeping its forward
+   * speed — the big jump a log caught the bike making off a collision.
+   * Only from the ground, so it can't be chained into flight, and not on the
+   * grid before the start.
+   */
+  private bikeJump(racer: Racer): void {
+    if (!racer.rider.isRiding || this.flow.current === RacePhase.COUNTDOWN) return;
+    const controller = racer.bike.controller;
+    if (!controller.wheelIsGrounded(0) && !controller.wheelIsGrounded(1)) return;
+    const v = controller.chassisBody.linvel();
+    controller.chassisBody.setLinvel({ x: v.x, y: BIKE_JUMP_SPEED, z: v.z }, true);
+  }
+
+  /**
    * B: the full-speed knockdown from the Drag Race log, from any point in a
    * race. Snaps the bike to `DEBUG_JUMP_SPEED` along its heading, then
    * applies the same sideways-and-up knock as X, so the tumble is the one a
@@ -888,6 +922,19 @@ export class Game {
     console.log(
       `[${hit.attacker.isPlayer ? "Phase 6" : "Phase 7"}] ${hit.attacker.name} ${hit.kind}ed ${hit.victim.name} off ` +
         `(impulse ${hit.impulse.toFixed(0)}, closing ${hit.closingSpeed.toFixed(1)} m/s).`,
+    );
+  }
+
+  /** The player ran into a vehicle: a crash throws them off, a shunt only thumps. */
+  private onTrafficImpact(impact: ImpactReport): void {
+    if (impact.crashed) {
+      this.engineAudio.playImpact(2.5);
+      this.engineAudio.playFall(1);
+    } else {
+      this.engineAudio.playImpact(0.8);
+    }
+    console.log(
+      `[traffic] ${impact.crashed ? "crashed into" : "shunted"} a ${impact.vehicle} at ${impact.closingKph.toFixed(0)} km/h closing.`,
     );
   }
 
@@ -1094,6 +1141,7 @@ export class Game {
       if (this.input.wasJustPressed("KeyT")) this.toggleTransmissionMode();
       if (this.input.wasJustPressed("KeyC")) this.hud.showCameraMode(CAMERA_LABELS[this.cameraRig.cycle()]);
       if (this.input.wasJustPressed("KeyX")) this.debugKnockDown(this.player);
+      if (this.input.wasJustPressed("KeyJ")) this.bikeJump(this.player);
       if (this.input.wasJustPressed("KeyB")) this.debugBigJump(this.player);
       if (this.input.wasJustPressed("KeyZ")) this.debugKnockDown(this.nearestOpponent());
       if (this.input.wasJustPressed("KeyM")) this.telemetry?.mark();
@@ -1119,6 +1167,11 @@ export class Game {
         this.player.bike.controller.setBoost(this.nitro.isActive, this.nitro.isTurbo, this.nitro.isHyper);
       }
       this.combat.tick(FIXED_DT);
+      if (this.traffic && phase !== RacePhase.COUNTDOWN) {
+        const impact = this.traffic.resolvePlayerImpact(this.player, FIXED_DT);
+        if (impact) this.onTrafficImpact(impact);
+        this.traffic.update(FIXED_DT);
+      }
       for (const racer of this.racers) racer.bike.prePhysicsStep(FIXED_DT);
       this.physics.step();
       for (const racer of this.racers) racer.bike.postPhysicsStep();
@@ -1161,6 +1214,7 @@ export class Game {
     }
 
     const frameDelta = this.accumulator.frameDelta;
+    this.traffic?.syncRender(this.accumulator.alpha);
     for (const racer of this.racers) {
       racer.bike.syncRender(this.accumulator.alpha, frameDelta);
       racer.rider.syncRender(this.accumulator.alpha);

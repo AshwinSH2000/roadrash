@@ -28,7 +28,20 @@ export interface GridPose {
   distance: number;
 }
 
+/** The one course where everyone starts in a single row across the road, like a drag strip. */
+const LINE_ABREAST_COURSE = "Drag Race";
+const LINE_ABREAST_SPACING = 2.2;
+
 export function gridPose(track: TrackDefinition, slot: number, height = 1.0): GridPose {
+  if (track.name === LINE_ABREAST_COURSE) {
+    const count = GRID_COLUMNS * GRID_ROWS;
+    const lateral = (slot - (count - 1) / 2) * LINE_ABREAST_SPACING;
+    return {
+      position: track.spawnPoint(track.startDistance, lateral, height),
+      rotation: track.spawnRotation(track.startDistance),
+      distance: track.startDistance,
+    };
+  }
   const row = Math.floor(slot / GRID_COLUMNS);
   const column = slot % GRID_COLUMNS;
   const lateral = column === 0 ? -GRID_LATERAL : GRID_LATERAL;

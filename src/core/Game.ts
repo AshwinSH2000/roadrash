@@ -287,7 +287,7 @@ export class Game {
       const personality = OPPONENT_PERSONALITIES[personalityIndex++];
       const behavior = new CombatBehavior(racer, this.racers, this.combat, personality, this.aiCombatSettings);
       this.combatBehaviors.push(behavior);
-      racer.baseDriver = new OpponentAI(racer, this.track, this.racers, personality, behavior);
+      racer.baseDriver = new OpponentAI(racer, this.track, this.racers, personality, behavior, this.traffic);
       racer.driver = racer.baseDriver;
     }
 
@@ -1168,8 +1168,10 @@ export class Game {
       }
       this.combat.tick(FIXED_DT);
       if (this.traffic && phase !== RacePhase.COUNTDOWN) {
-        const impact = this.traffic.resolvePlayerImpact(this.player, FIXED_DT);
-        if (impact) this.onTrafficImpact(impact);
+        for (const racer of this.racers) {
+          const impact = this.traffic.resolvePlayerImpact(racer, FIXED_DT);
+          if (impact && racer.isPlayer) this.onTrafficImpact(impact);
+        }
         this.traffic.update(FIXED_DT);
       }
       for (const racer of this.racers) racer.bike.prePhysicsStep(FIXED_DT);

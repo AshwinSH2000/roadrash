@@ -66,6 +66,9 @@ function assertTrackFacesUp(group: THREE.Group): void {
   console.log(`track geometry   ${checked} bands, all facing upward\n`);
 }
 
+import { Traffic } from "../src/entities/Traffic";
+import { GROUPS_BIKE_GHOST } from "../src/physics/CollisionGroups";
+
 async function main(): Promise<void> {
   const physics = await PhysicsWorld.create();
   const surfaces = new SurfaceRegistry();
@@ -109,8 +112,12 @@ async function main(): Promise<void> {
     racerByCollider.set(bike.controller.chassisCollider.handle, racer);
   }
 
+  // TRAFFIC=1 puts the drag-strip traffic in the race; bots are ghosts to it.
+  const traffic = process.env.TRAFFIC ? new Traffic(physics, scene, track) : null;
+  let trafficHits = 0;
+  if (traffic) for (const r of racers) r.bike.controller.chassisCollider.setCollisionGroups(GROUPS_BIKE_GHOST);
   for (let i = 0; i < racers.length; i++) {
-    racers[i].driver = new OpponentAI(racers[i], track, racers, personalities[i]);
+    racers[i].driver = new OpponentAI(racers[i], track, racers, personalities[i], null, traffic);
   }
 
   const stunts = new StuntSystem(track);
@@ -135,6 +142,10 @@ async function main(): Promise<void> {
 
   while (finished < racers.length && elapsed < TIMEOUT_SECONDS) {
     for (const racer of racers) racer.tickDriver(FIXED_DT);
+    if (traffic) {
+      for (const racer of racers) if (traffic.resolvePlayerImpact(racer, FIXED_DT)?.crashed) { trafficHits++; console.log(`  [traffic] ${racer.name} hit a vehicle at ${racer.distanceAlong.toFixed(0)} m lat ${racer.lateralOffset.toFixed(1)} speed ${(racer.bike.forwardSpeed*3.6).toFixed(0)}`); }
+      traffic.update(FIXED_DT);
+    }
     for (const racer of racers) racer.bike.prePhysicsStep(FIXED_DT);
     physics.step();
     for (const racer of racers) racer.bike.postPhysicsStep();
@@ -264,6 +275,7 @@ async function main(): Promise<void> {
   }
 
   console.log("");
+  if (traffic) console.log(`traffic crashes: ${trafficHits}`);
   if (failures.length > 0) {
     for (const f of failures) console.error(`FAIL  ${f}`);
     process.exit(1);

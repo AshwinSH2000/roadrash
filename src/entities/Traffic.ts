@@ -20,8 +20,10 @@ import type { Racer } from "./Racer";
  * - below it: the vehicle eases off for a moment and the contact itself slows
  *   the bike. The rider stays on.
  *
- * Only the player's bike is solid to traffic — the bots have no way to dodge,
- * so they drive through it (`GROUPS_BIKE_GHOST`).
+ * Bots are not solid to traffic (`GROUPS_BIKE_GHOST`), but take the same
+ * analytic hit test: any hit while riding throws a bot. They steer around
+ * vehicles (`avoidanceBias`), so a hit only happens when a bot is hunting a
+ * rival and cuts in behind a vehicle that hides it.
  */
 
 /** Lanes across the road, left to right, as lateral offsets from the centreline in metres. */
@@ -53,6 +55,30 @@ const FOLLOW_GAP = 8;
 /** The player's chassis half length and half width (`VehicleController`), for the collision test. */
 const BIKE_HALF_LENGTH = 1.0;
 const BIKE_HALF_WIDTH = 0.4;
+/** Bot avoidance: look-ahead is this plus seconds of travel; side margin is past a vehicle's edge, beyond the bike's half width; all in metres. */
+const AVOID_LOOKAHEAD_BASE = 30;
+const AVOID_LOOKAHEAD_SECONDS = 2.2;
+const AVOID_SIDE_MARGIN = 0.7;
+/** Lateral speed in m/s a bot is assumed to manage when swerving, and the extra metres it wants beyond that. */
+const AVOID_SWERVE_RATE = 2.5;
+const AVOID_SWERVE_MARGIN = 10;
+const AVOID_EDGE_MARGIN = 1.2;
+const AVOID_LATERAL_STEP = 0.35;
+/** Metres per second of pace a bot gives up to stay one metre closer to its preferred line. */
+const AVOID_PREFERENCE_WEIGHT = 0.8;
+/** Speed in m/s a clear line is worth, about a bot's top speed. */
+const AVOID_OPEN_SPEED = 36;
+/** Most a far-off slower vehicle counts for in m/s above its own speed, so a bot still prefers a line with nobody ahead. */
+const AVOID_LEADER_BONUS = 14;
+/** A bot plans to stop this far short of a blocked road, braking at this rate in m/s^2. */
+const AVOID_STOP_GAP = 4;
+const AVOID_BRAKE_DECEL = 7;
+/** A bot creeping against a stopped vehicle is not a crash: closing speed in m/s it takes to count. */
+const BOT_MIN_CLOSING = 4;
+/** A vehicle that was hit stays stopped this long, in seconds, then drives on. */
+const HALT_SECONDS = 7;
+/** Slowest speed in m/s traffic ever tells a bot to hold, so a bot beside a stopped vehicle can still creep out. */
+const AVOID_CREEP_SPEED = 3;
 /** Seconds a vehicle ignores the player after a collision, so a shunt isn't counted every step. */
 const HIT_COOLDOWN = 1.5;
 
@@ -92,6 +118,8 @@ interface Vehicle {
   speed: number;
   cruiseSpeed: number;
   halted: boolean;
+  /** Seconds left before a crashed-into vehicle drives on again. */
+  haltTimer: number;
   /** While above zero the vehicle holds `bumpSpeed`; set by a shunt. */
   bumpTimer: number;
   bumpSpeed: number;
@@ -105,6 +133,13 @@ export interface ImpactReport {
   closingKph: number;
   /** True if the rider was thrown off; false for a shunt. */
   crashed: boolean;
+}
+
+export interface TrafficPlan {
+  /** Lateral offset to aim for, in metres. */
+  lateral: number;
+  /** Fastest speed in m/s that still lets the bot stop short of a blocked road. */
+  speedCap: number;
 }
 
 export class Traffic {
@@ -182,6 +217,7 @@ export class Traffic {
         speed: cruise,
         cruiseSpeed: cruise,
         halted: false,
+        haltTimer: 0,
         bumpTimer: 0,
         bumpSpeed: 0,
         cooldown: 0,
@@ -205,7 +241,8 @@ export class Traffic {
     for (const vehicle of this.vehicles) {
       if (vehicle.cooldown > 0) continue;
       const closing = bikeSpeed - vehicle.speed;
-      if (closing <= 0) continue;
+      if (closing <= (racer.isPlayer ? 0 : BOT_MIN_CLOSING)) continue;
+      if (!racer.isPlayer && (!racer.rider.isRiding || racer.hasFinished)) continue;
       const lateral = Math.abs(racer.lateralOffset - LANE_CENTRES[vehicle.lane]);
       if (lateral > vehicle.spec.width / 2 + BIKE_HALF_WIDTH) continue;
 
@@ -215,17 +252,20 @@ export class Traffic {
 
       vehicle.cooldown = HIT_COOLDOWN;
       const closingKph = closing * 3.6;
-      const crashed = racer.rider.isRiding && closingKph >= CRASH_CLOSING_KPH;
+      // A bot cannot be slowed by a ghost contact, so any hit throws it.
+      const crashed = racer.rider.isRiding && (!racer.isPlayer || closingKph >= CRASH_CLOSING_KPH);
       if (crashed) {
         // Over the bars: mostly up, some forward, a little to a random side.
         this.tmpForward.set(0, 0, 1).applyQuaternion(bike.worldQuaternion);
+        const power = racer.isPlayer ? 1 : THREE.MathUtils.clamp(closingKph / CRASH_CLOSING_KPH, 0.5, 1);
         this.tmpImpulse
           .copy(this.tmpForward)
-          .multiplyScalar(180)
-          .setY(300)
+          .multiplyScalar(180 * power)
+          .setY(300 * power)
           .addScaledVector(this.tmpForward.set(1, 0, 0).applyQuaternion(bike.worldQuaternion), (Math.random() - 0.5) * 260);
         racer.rider.knockOff(this.tmpImpulse);
         vehicle.halted = true;
+        vehicle.haltTimer = HALT_SECONDS;
       } else {
         vehicle.bumpTimer = BUMP_SECONDS;
         vehicle.bumpSpeed = vehicle.speed * BUMP_SPEED_SHARE;
@@ -237,6 +277,77 @@ export class Traffic {
       };
     }
     return report;
+  }
+
+  /**
+   * Where a bot should ride to get past the vehicles ahead, and the speed it
+   * can carry there. Tries lateral positions across the road and takes the one
+   * with the longest clear run, with a pull toward `preferred`. If even that
+   * is blocked (the gaps between lanes are barely wider than a bike) the bot
+   * is told to slow to the blocking vehicle's pace, stopping short of it.
+   */
+  plan(self: Racer, preferred: number): TrafficPlan {
+    const speed = Math.max(0, self.bike.forwardSpeed);
+    const lookahead = AVOID_LOOKAHEAD_BASE + AVOID_LOOKAHEAD_SECONDS * speed;
+    const reach = ROAD_HALF_WIDTH - AVOID_EDGE_MARGIN;
+    const ahead: Vehicle[] = [];
+    for (const v of this.vehicles) {
+      const gap = v.distance - v.spec.length / 2 - self.distanceAlong;
+      if (gap > -v.spec.length - 2 && gap < lookahead) ahead.push(v);
+    }
+    if (ahead.length === 0) return { lateral: preferred, speedCap: Infinity };
+
+    let best = preferred;
+    let bestScore = -Infinity;
+    let bestFree = lookahead;
+    let bestLeader: Vehicle | null = null;
+    for (let lat = -reach; lat <= reach + 1e-6; lat += AVOID_LATERAL_STEP) {
+      let free = lookahead;
+      let leader: Vehicle | null = null;
+      for (const v of ahead) {
+        if (Math.abs(lat - LANE_CENTRES[v.lane]) >= v.spec.width / 2 + AVOID_SIDE_MARGIN) continue;
+        const gap = Math.max(0, v.distance - v.spec.length / 2 - self.distanceAlong - BIKE_HALF_LENGTH);
+        if (gap < free) {
+          free = gap;
+          leader = v;
+        }
+      }
+      // What the line is worth: the speed it lets the bot carry, less a pull toward its own line.
+      const pace = leader
+        ? Math.min(AVOID_OPEN_SPEED, leader.speed + Math.min(AVOID_LEADER_BONUS, Math.sqrt(2 * AVOID_BRAKE_DECEL * Math.max(0, free - AVOID_STOP_GAP))))
+        : AVOID_OPEN_SPEED;
+      const score = pace + 0.02 * free - AVOID_PREFERENCE_WEIGHT * Math.abs(lat - preferred);
+      if (score > bestScore) {
+        bestScore = score;
+        best = lat;
+        bestFree = free;
+        bestLeader = leader;
+      }
+    }
+
+    // The bike cannot change lane at once, so the speed limit follows what is
+    // in the way of where it is now, not where it is heading.
+    let nearest: Vehicle | null = null;
+    let nearestGap = lookahead;
+    for (const v of ahead) {
+      if (Math.abs(self.lateralOffset - LANE_CENTRES[v.lane]) >= v.spec.width / 2 + AVOID_SIDE_MARGIN) continue;
+      const gap = Math.max(0, v.distance - v.spec.length / 2 - self.distanceAlong - BIKE_HALF_LENGTH);
+      if (gap < nearestGap) {
+        nearestGap = gap;
+        nearest = v;
+      }
+    }
+    // While the blocker in its own path is still far enough for the swerve to
+    // finish, the bot is limited only by what is on the line it is moving to,
+    // so it speeds up as soon as it has seen a gap. Closer than that, it must
+    // brake for the blocker.
+    const swerveDistance = speed * (Math.abs(best - self.lateralOffset) / AVOID_SWERVE_RATE) + AVOID_SWERVE_MARGIN;
+    const capBehind = (leader: Vehicle | null, gap: number): number =>
+      leader
+        ? Math.max(AVOID_CREEP_SPEED, leader.speed + Math.sqrt(2 * AVOID_BRAKE_DECEL * Math.max(0, gap - AVOID_STOP_GAP)))
+        : Infinity;
+    const speedCap = nearest && nearestGap <= swerveDistance ? capBehind(nearest, nearestGap) : capBehind(bestLeader, bestFree);
+    return { lateral: best, speedCap };
   }
 
   /** Advances every vehicle by one fixed step and tells the physics body where to be next. */
@@ -265,7 +376,11 @@ export class Traffic {
           const room = Math.max(0, gap - FOLLOW_GAP);
           target = Math.min(target, leader.speed + Math.sqrt(2 * COMFORT_DECEL * room));
         }
-        if (v.halted) target = 0;
+        if (v.halted) {
+          v.haltTimer -= dt;
+          if (v.haltTimer <= 0) v.halted = false;
+          else target = 0;
+        }
 
         const decel = v.halted ? EMERGENCY_DECEL : COMFORT_DECEL;
         if (v.speed > target) v.speed = Math.max(target, v.speed - decel * dt);

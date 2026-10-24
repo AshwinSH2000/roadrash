@@ -567,3 +567,35 @@ export function createSignTexture(kind: SignKind): THREE.CanvasTexture | null {
   texture.anisotropy = 4;
   return texture;
 }
+
+const BILLBOARD_ADS: ReadonlyArray<{ bg: string; fg: string; text: string }> = [
+  { bg: "#c8201c", fg: "#fff4d6", text: "NITRO COLA" },
+  { bg: "#1f4fa8", fg: "#ffd23a", text: "IRON TYRE" },
+  { bg: "#1c1c1c", fg: "#ff9a1a", text: "ROAD RASH" },
+  { bg: "#e8c21c", fg: "#222222", text: "HELMETS 2 4 1" },
+  { bg: "#1f8a4c", fg: "#f6f4ec", text: "GREEN MILE FUEL" },
+];
+
+/** How many distinct roadside ad boards `createBillboardTexture` can draw. */
+export const BILLBOARD_VARIANTS = BILLBOARD_ADS.length;
+
+/** A roadside ad board: a flat colour with a bold made-up brand name and a stripe. `null` under Node. */
+export function createBillboardTexture(variant: number): THREE.CanvasTexture | null {
+  if (!canvasAvailable()) return null;
+  const ad = BILLBOARD_ADS[variant % BILLBOARD_ADS.length];
+  const { canvas, ctx } = makeCanvas(256);
+  ctx.fillStyle = ad.bg;
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = ad.fg;
+  ctx.fillRect(0, 196, 256, 14);
+  ctx.font = "bold 44px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const words = ad.text.split(" ");
+  const lines = words.length > 2 ? [words.slice(0, 2).join(" "), words.slice(2).join(" ")] : [ad.text];
+  lines.forEach((line, n) => ctx.fillText(line, 128, 100 + (n - (lines.length - 1) / 2) * 52, 240));
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}

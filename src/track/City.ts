@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { LampRegistry } from "./LampRegistry";
 import type { TrackDefinition } from "./TrackDefinition";
 import { CITY_HALF_WIDTH, OFFROAD_HALF_WIDTH, ROAD_HALF_WIDTH } from "./TrackDefinition";
 import type { GraphicsSettings } from "../settings/GraphicsSettings";
@@ -88,14 +89,14 @@ function townIndex(track: TrackDefinition, distance: number): number | null {
 }
 
 /** Everything a town has: buildings with their shopfronts, awnings, balconies and rooftops, and the furniture of the street. */
-export function buildCity(track: TrackDefinition, quality: GraphicsSettings, disposers: Array<() => void>): THREE.Group {
+export function buildCity(track: TrackDefinition, quality: GraphicsSettings, disposers: Array<() => void>, lamps?: LampRegistry): THREE.Group {
   const group = new THREE.Group();
   group.name = "city";
   const buildings = placeBuildings(track, quality);
   if (buildings.length === 0) return group;
   group.add(buildBuildingMeshes(buildings, disposers));
   group.add(buildBuildingDetail(buildings, disposers));
-  group.add(buildStreetFurniture(track, quality, disposers));
+  group.add(buildStreetFurniture(track, quality, disposers, lamps));
   return group;
 }
 
@@ -325,7 +326,7 @@ function buildBuildingDetail(buildings: Building[], disposers: Array<() => void>
 // --- The street ---------------------------------------------------------------
 
 /** Lamp posts, trees, benches, bins, barriers, bollards, signs and zebra crossings along every stretch of town. */
-function buildStreetFurniture(track: TrackDefinition, quality: GraphicsSettings, disposers: Array<() => void>): THREE.Group {
+function buildStreetFurniture(track: TrackDefinition, quality: GraphicsSettings, disposers: Array<() => void>, lamps?: LampRegistry): THREE.Group {
   const group = new THREE.Group();
   group.name = "city-street-furniture";
   const fill = Math.min(1, 0.5 + quality.sceneryDensity * 0.6);
@@ -358,7 +359,7 @@ function buildStreetFurniture(track: TrackDefinition, quality: GraphicsSettings,
   };
 
   const darkMetal = shared(new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.6, metalness: 0.3 }));
-  const lampGlow = shared(new THREE.MeshStandardMaterial({ color: 0xf2f0e0, emissive: 0xfff3c4, emissiveIntensity: 0.9, roughness: 0.5 }));
+  const lampGlow = shared(new THREE.MeshStandardMaterial({ color: 0xf2f0e0, emissive: 0xfff3c4, emissiveIntensity: lamps?.lit ? 2.2 : 0.35, roughness: 0.5 }));
   const wood = shared(new THREE.MeshStandardMaterial({ color: 0x7a5a3c, roughness: 0.9 }));
   const bollardYellow = shared(new THREE.MeshStandardMaterial({ color: 0xe8b923, roughness: 0.6 }));
   const trunkMaterial = shared(new THREE.MeshStandardMaterial({ color: 0x5a4030, roughness: 1 }));
@@ -378,6 +379,7 @@ function buildStreetFurniture(track: TrackDefinition, quality: GraphicsSettings,
     poles.push({ matrix: compose(s.position, s.toRoad, 3.6) });
     arms.push({ matrix: compose(s.position, s.toRoad, 7.1, new THREE.Vector3(0, 0, 1.0)) });
     heads.push({ matrix: compose(s.position, s.toRoad, 6.95, new THREE.Vector3(0, 0, 2.0)) });
+    lamps?.positions.push(s.position.clone().addScaledVector(s.toRoad, 2.0).setY(s.position.y + 6.95));
   }
   mesh(shared(new THREE.CylinderGeometry(0.07, 0.1, 7.2, 8)), darkMetal, poles, "city-lamp-poles");
   mesh(shared(new THREE.BoxGeometry(0.1, 0.1, 2.2)), darkMetal, arms, "city-lamp-arms");

@@ -14,8 +14,9 @@ import {
   createWaterTexture,
 } from "../render/Textures";
 import { LoopGeometry, type TrackFeature } from "./TrackFeatures";
+import type { LampRegistry } from "./LampRegistry";
 import { buildBoundaryWalls } from "./Boundary";
-import { buildCurveSigns, buildStartLight, type StartLightState } from "./Roadside";
+import { buildBillboards, buildCurveSigns, buildStartLight, buildStreetLamps, type StartLightState } from "./Roadside";
 
 /**
  * Turns a `TrackDefinition` spline into actual geometry: a road ribbon and
@@ -53,6 +54,8 @@ interface BandSpec {
   outerLift?: number;
   /** Track distance covered by one V-repeat of the UVs, in metres. */
   uvRepeatLength?: number;
+  /** Adds an `aLateral` attribute: distance from the centreline in metres, for the winter snow grading. */
+  lateralAttr?: boolean;
   /** Return false to omit a segment entirely — used to make dashed markings. */
   segmentFilter?: (segmentIndex: number) => boolean;
 }
@@ -85,12 +88,14 @@ function buildBand(track: TrackDefinition, spec: BandSpec): BandGeometry {
     innerLift = 0,
     outerLift = 0,
     uvRepeatLength = 10,
+    lateralAttr = false,
     segmentFilter,
   } = spec;
 
   const count = track.sampleCount;
   const positions: number[] = [];
   const uvs: number[] = [];
+  const laterals: number[] = [];
   const indices: number[] = [];
 
   // Sample index -> index of its first emitted vertex, or -1 if not emitted.
@@ -118,6 +123,7 @@ function buildBand(track: TrackDefinition, spec: BandSpec): BandGeometry {
 
     const v = distance / uvRepeatLength;
     uvs.push(0, v, 1, v);
+    if (lateralAttr) laterals.push(Math.abs(innerLateral), Math.abs(outerLateral));
 
     vertexRowStart[sampleIndex] = rowStart;
     return rowStart;
@@ -149,6 +155,7 @@ function buildBand(track: TrackDefinition, spec: BandSpec): BandGeometry {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positionArray, 3));
   geometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  if (lateralAttr) geometry.setAttribute("aLateral", new THREE.BufferAttribute(new Float32Array(laterals), 1));
   geometry.setIndex(new THREE.BufferAttribute(indexArray, 1));
   geometry.computeVertexNormals();
 
@@ -323,6 +330,7 @@ export function buildTrack(
   scene: THREE.Scene,
   track: TrackDefinition,
   surfaces: SurfaceRegistry,
+  lamps: LampRegistry = { lit: false, positions: [] },
 ): BuiltTrack {
   const group = new THREE.Group();
   scene.add(group);
@@ -339,12 +347,13 @@ export function buildTrack(
     innerLateral: -ROAD_HALF_WIDTH,
     outerLateral: ROAD_HALF_WIDTH,
     uvRepeatLength: roadTileMetres,
+    lateralAttr: true,
     segmentFilter: (seg) => !track.segmentInFeature(seg),
   });
-  const roadMesh = new THREE.Mesh(
-    roadBand.geometry,
-    terrainMaterial(createAsphaltTexture(ROAD_HALF_WIDTH * 2), ROAD_FALLBACK_COLOR, 0.95),
-  );
+  const roadMaterial = terrainMaterial(createAsphaltTexture(ROAD_HALF_WIDTH * 2), ROAD_FALLBACK_COLOR, 0.95);
+  // Winter: only lightly dusted, so the road still reads against the snow around it (`render/Environment.ts`).
+  roadMaterial.userData.snowTrack = true;
+  const roadMesh = new THREE.Mesh(roadBand.geometry, roadMaterial);
   roadMesh.receiveShadow = true;
   group.add(markAsBand(roadMesh, "road"));
   const roadCollider = addTrimeshCollider(physics, staticBody, roadBand, 1.0);
@@ -376,6 +385,7 @@ export function buildTrack(
     OFFROAD_FALLBACK_COLOR,
     1.0,
   );
+  offroadMaterial.userData.snowTrack = true;
   const offroadColliders: RAPIER.Collider[] = [];
   for (const side of [-1, 1] as const) {
     const band = buildBand(track, {
@@ -383,6 +393,7 @@ export function buildTrack(
       outerLateral: side * OFFROAD_HALF_WIDTH,
       outerLift: OFFROAD_OUTER_DROP,
       uvRepeatLength: offroadTileMetres,
+      lateralAttr: true,
       segmentFilter: (seg) => !track.segmentInFeature(seg, "river", true) && !track.segmentInFeature(seg, "loop", true),
     });
     const mesh = new THREE.Mesh(band.geometry, offroadMaterial);
@@ -516,6 +527,8 @@ export function buildTrack(
   const pavementWidth = CITY_HALF_WIDTH - ROAD_HALF_WIDTH - KERB_WIDTH;
   const pavementMaterial = terrainMaterial(createPavementTexture(pavementWidth), 0x9a9a96, 0.95);
   const kerbMaterial = new THREE.MeshStandardMaterial({ color: 0xc9c7c0, roughness: 0.9 });
+  // Winter: the strips beside the asphalt are 70% snow, between the road (30%) and the open ground (100%).
+  for (const m of [dirtMaterial, pavementMaterial, kerbMaterial]) m.userData.snowTrack = true;
   for (const side of [-1, 1] as const) {
     const name = side < 0 ? "left" : "right";
     const dirt = buildBand(track, {
@@ -524,6 +537,7 @@ export function buildTrack(
       innerLift: 0.03,
       outerLift: slope(ROAD_HALF_WIDTH + SHOULDER_WIDTH) + 0.03,
       uvRepeatLength: 2,
+      lateralAttr: true,
       segmentFilter: stripSegment(false),
     });
     const dirtMesh = new THREE.Mesh(dirt.geometry, dirtMaterial);
@@ -536,6 +550,7 @@ export function buildTrack(
       innerLift: 0.05,
       outerLift: slope(ROAD_HALF_WIDTH + KERB_WIDTH) + 0.05,
       uvRepeatLength: 2,
+      lateralAttr: true,
       segmentFilter: stripSegment(true),
     });
     group.add(markAsBand(new THREE.Mesh(kerb.geometry, kerbMaterial), `kerb-${name}`));
@@ -545,6 +560,7 @@ export function buildTrack(
       innerLift: 0.04,
       outerLift: slope(CITY_HALF_WIDTH) + 0.04,
       uvRepeatLength: 2,
+      lateralAttr: true,
       segmentFilter: stripSegment(true),
     });
     const pavementMesh = new THREE.Mesh(pavement.geometry, pavementMaterial);
@@ -557,6 +573,8 @@ export function buildTrack(
   group.add(buildCurveSigns(track, roadsideDisposers));
   const startLight = buildStartLight(track, roadsideDisposers);
   group.add(startLight.group);
+  group.add(buildStreetLamps(track, roadsideDisposers, lamps));
+  group.add(buildBillboards(track, roadsideDisposers));
 
   // --- Start and finish line markings ------------------------------------
   group.add(buildLineMarker(track, track.startDistance, 0x2f6fd0));

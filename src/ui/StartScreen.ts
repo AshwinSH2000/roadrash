@@ -4,6 +4,7 @@ import {
   type QualityLevel,
 } from "../settings/GraphicsSettings";
 import type { TransmissionMode } from "../physics/Transmission";
+import { DAY_MODES, SEASONS, type DayMode, type Season } from "../render/Environment";
 import { isTouchDevice, requestTiltPermissionFromGesture } from "../core/MobileInputManager";
 import { DISPLAY, MONO, button, el, overlay } from "./dom";
 
@@ -23,6 +24,8 @@ export interface StartChoice {
   /** A course name, or null for a random one. */
   track: string | null;
   transmission: TransmissionMode;
+  season: Season;
+  dayMode: DayMode;
 }
 
 export interface StartScreenOptions {
@@ -30,6 +33,8 @@ export interface StartScreenOptions {
   initialTrack: string | null;
   initialQuality?: QualityLevel;
   initialTransmission?: TransmissionMode;
+  initialSeason?: Season;
+  initialDayMode?: DayMode;
   /** Skip the screen and start with the initial choices — for headless screenshots and sims. */
   autostart?: boolean;
 }
@@ -70,21 +75,28 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
       quality: options.initialQuality ?? DEFAULT_QUALITY,
       track: options.initialTrack,
       transmission: options.initialTransmission ?? "automatic",
+      season: options.initialSeason ?? "summer",
+      dayMode: options.initialDayMode ?? "day",
     });
   }
   const touch = isTouchDevice();
   return new Promise((resolve) => {
     const root = overlay(40, 0.72);
     root.style.display = "flex";
-    root.style.gap = "18px";
+    // Short screens (a phone in landscape) are tighter and smaller. Centring is done with auto
+    // margins on the first and last child, not `justify-content:center`, which would push the
+    // title off the top of a scrolling overlay where it can never be scrolled back to.
+    const compact = window.innerHeight < 560;
+    root.style.justifyContent = "flex-start";
+    root.style.gap = compact ? "8px" : "18px";
     // Small windows: let the screen scroll rather than clip the title or the button.
     root.style.overflow = "auto";
-    root.style.padding = "24px 0";
+    root.style.padding = compact ? "10px 0" : "24px 0";
     root.style.boxSizing = "border-box";
 
     const title = el(
       "div",
-      `font:900 56px/1 ${DISPLAY};letter-spacing:0.18em;text-transform:uppercase;text-shadow:0 4px 24px rgba(0,0,0,0.8);flex-shrink:0`,
+      `font:900 ${compact ? 34 : 56}px/1 ${DISPLAY};letter-spacing:0.18em;text-transform:uppercase;text-shadow:0 4px 24px rgba(0,0,0,0.8);flex-shrink:0`,
       "Road Rash",
     );
     const subtitle = el(
@@ -221,9 +233,68 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
       controls.appendChild(item);
     }
 
+    // --- second step: season and time of day ------------------------------
+    let season: Season = options.initialSeason ?? "summer";
+    let dayMode: DayMode = options.initialDayMode ?? "day";
+    const SEASON_DESCRIPTIONS: Record<Season, string> = {
+      summer: "clear and green, as the roads are now",
+      winter: "snow on everything and snowfall; tracks show dark where riders have been",
+      rainy: "grey sky and rain",
+    };
+    const DAY_DESCRIPTIONS: Record<DayMode, string> = {
+      day: "full daylight",
+      night: "dark sky, headlights, lit street lamps",
+    };
+    /** A row of option cards with one selected, and a line under it describing the choice. */
+    const choiceBlock = <T extends string>(heading: string, values: readonly T[], initial: T, descriptions: Record<T, string>, onPick: (value: T) => void): HTMLDivElement => {
+      const block = el("div", "display:flex;flex-direction:column;gap:10px;align-items:center");
+      block.appendChild(el("div", `font:600 13px/1 ${MONO};letter-spacing:0.2em;opacity:0.75`, heading));
+      const row = el("div", "display:flex;gap:12px");
+      const describeLine = el("div", `font:400 13px/1.4 ${MONO};opacity:0.7;min-height:1.4em;text-align:center`);
+      const cardFor = new Map<T, HTMLDivElement>();
+      const select = (value: T): void => {
+        onPick(value);
+        for (const [v, card] of cardFor) {
+          const on = v === value;
+          card.style.borderColor = on ? "#ff9f1c" : "rgba(255,255,255,0.35)";
+          card.style.background = on ? "rgba(255,159,28,0.18)" : "rgba(255,255,255,0.06)";
+        }
+        describeLine.textContent = descriptions[value];
+      };
+      for (const value of values) {
+        const card = el(
+          "div",
+          ["cursor:pointer", "width:120px", "padding:13px 0", "text-align:center", "border:2px solid rgba(255,255,255,0.35)", "border-radius:8px", `font:700 18px/1 ${DISPLAY}`, "letter-spacing:0.1em", "text-transform:uppercase", "user-select:none"].join(";"),
+          value,
+        );
+        card.addEventListener("click", () => select(value));
+        cardFor.set(value, card);
+        row.appendChild(card);
+      }
+      block.append(row, describeLine);
+      select(initial);
+      return block;
+    };
+    const seasonBlock = choiceBlock("SEASON", SEASONS, season, SEASON_DESCRIPTIONS, (v) => (season = v));
+    const dayBlock = choiceBlock("TIME OF DAY", DAY_MODES, dayMode, DAY_DESCRIPTIONS, (v) => (dayMode = v));
+
     // --- go --------------------------------------------------------------
-    const start = button("Start race", true);
+    let step: 1 | 2 = 1;
+    const start = button("Continue", true);
+    const back = button("Back", false);
+    back.style.display = "none";
     const hint = el("div", `font:400 12px/1 ${MONO};opacity:0.5;letter-spacing:0.15em`, "or press ENTER");
+    const stepOne: HTMLElement[] = touch ? [qualityBlock, courseBlock, controls] : [qualityBlock, ...(SHOW_TRANSMISSION_PICKER ? [transmissionBlock] : []), courseBlock, controls];
+    const stepTwo: HTMLElement[] = [seasonBlock, dayBlock];
+    // Clearing `display` would drop the flex layout each block was built with, so remember it.
+    const shownAs = new Map<HTMLElement, string>([...stepOne, ...stepTwo].map((item) => [item, item.style.display]));
+    const showStep = (next: 1 | 2): void => {
+      step = next;
+      for (const item of stepOne) item.style.display = next === 1 ? shownAs.get(item) ?? "" : "none";
+      for (const item of stepTwo) item.style.display = next === 2 ? shownAs.get(item) ?? "" : "none";
+      start.textContent = next === 1 ? "Continue" : "Start race";
+      back.style.display = next === 2 ? "" : "none";
+    };
 
     const finish = (): void => {
       window.removeEventListener("keydown", onKey);
@@ -234,19 +305,23 @@ export function showStartScreen(options: StartScreenOptions): Promise<StartChoic
       // `requestTiltPermissionFromGesture` for why a second, silent request
       // later still works after this one succeeds.
       void requestTiltPermissionFromGesture();
-      resolve({ quality, track: select.value || null, transmission });
+      resolve({ quality, track: select.value || null, transmission, season, dayMode });
+    };
+    const advance = (): void => {
+      if (step === 1) showStep(2);
+      else finish();
     };
     const onKey = (event: KeyboardEvent): void => {
-      if (event.code === "Enter" || event.code === "NumpadEnter") finish();
+      if (event.code === "Enter" || event.code === "NumpadEnter") advance();
     };
-    start.addEventListener("click", finish);
+    start.addEventListener("click", advance);
+    back.addEventListener("click", () => showStep(1));
     window.addEventListener("keydown", onKey);
 
-    root.append(
-      ...(touch
-        ? [title, subtitle, qualityBlock, courseBlock, controls, start, hint]
-        : [title, subtitle, qualityBlock, ...(SHOW_TRANSMISSION_PICKER ? [transmissionBlock] : []), courseBlock, controls, start, hint]),
-    );
+    title.style.marginTop = "auto";
+    hint.style.marginBottom = "auto";
+    root.append(title, subtitle, ...stepOne, ...stepTwo, start, back, hint);
+    showStep(1);
     document.body.appendChild(root);
     start.focus();
   });

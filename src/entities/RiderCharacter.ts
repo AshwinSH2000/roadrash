@@ -432,8 +432,8 @@ export class RiderCharacterTemplate {
     cutGarments(scene);
   }
 
-  instantiate(color: number): RiderCharacter {
-    return new RiderCharacter(cloneSkinned(this.scene), color);
+  instantiate(color: number, trouserColor?: number): RiderCharacter {
+    return new RiderCharacter(cloneSkinned(this.scene), color, 1, trouserColor);
   }
 }
 
@@ -444,10 +444,10 @@ export function setRiderCharacter(scene: THREE.Object3D | null): void {
   template = scene ? new RiderCharacterTemplate(scene) : null;
 }
 
-export function createRiderCharacter(color: number): RiderCharacter | null {
+export function createRiderCharacter(color: number, trouserColor?: number): RiderCharacter | null {
   if (!template) return null;
   try {
-    return template.instantiate(color);
+    return template.instantiate(color, trouserColor);
   } catch (error) {
     // A model that cannot be used must not stop the race: fall back to the procedural rider.
     console.error(`[assets] rider model could not be used, keeping the procedural rider.\n${String(error)}`);
@@ -492,7 +492,7 @@ export class RiderCharacter {
   private readonly farMeshes: THREE.SkinnedMesh[] = [];
   private far = false;
 
-  constructor(scene: THREE.Object3D, color: number, scale = 1) {
+  constructor(scene: THREE.Object3D, color: number, scale = 1, trouserColor = 0x23262e) {
     scene.scale.multiplyScalar(scale);
     this.holder.add(scene);
     this.holder.updateMatrixWorld(true);
@@ -505,7 +505,7 @@ export class RiderCharacter {
     const palette: Record<string, THREE.Material> = {
       jacket: make(new THREE.Color(color).multiplyScalar(0.8).getHex(), 0.7),
       trim: make(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.78).getHex(), 0.5),
-      trousers: make(0x23262e, 0.85),
+      trousers: make(trouserColor, 0.85),
       gloves: make(0x15161a, 0.6),
       boots: make(0x15161a, 0.55),
       soles: make(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.78).getHex(), 0.6),

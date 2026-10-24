@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { GraphicsSettings } from "../settings/GraphicsSettings";
+import { DEFAULT_ENVIRONMENT, lookFor, type EnvironmentChoice, type Look } from "./Environment";
 
 export interface SceneSetup {
   scene: THREE.Scene;
@@ -20,9 +21,9 @@ const SUN_OFFSET = new THREE.Vector3(60, 90, 30);
  * gives way to the sky dome's own gradient doesn't show a seam between two
  * different blues.
  */
-const HORIZON_COLOR = new THREE.Color(0xcfe6f2);
+
 /** Deep blue overhead, at the top of the dome. */
-const ZENITH_COLOR = new THREE.Color(0x3f7fc4);
+
 
 /**
  * A cheap gradient sky, replacing a single flat background colour.
@@ -43,12 +44,12 @@ const ZENITH_COLOR = new THREE.Color(0x3f7fc4);
  * reads relative to world "up" — the dome mustn't tilt when the chase camera
  * pitches over a jump.
  */
-function buildSkyDome(radius: number): THREE.Mesh {
+function buildSkyDome(radius: number, look: Look): THREE.Mesh {
   const geometry = new THREE.SphereGeometry(radius, 16, 12);
   const material = new THREE.ShaderMaterial({
     uniforms: {
-      topColor: { value: ZENITH_COLOR },
-      bottomColor: { value: HORIZON_COLOR },
+      topColor: { value: new THREE.Color(look.zenith) },
+      bottomColor: { value: new THREE.Color(look.horizon) },
       offset: { value: 20 },
       exponent: { value: 0.6 },
     },
@@ -94,14 +95,20 @@ export function positionSkyDome(dome: THREE.Mesh, cameraPosition: THREE.Vector3)
  * is applied here and only here — nothing reconfigures the renderer while
  * racing (see `GraphicsSettings`).
  */
-export function createSceneSetup(container: HTMLElement, quality: GraphicsSettings): SceneSetup {
+export function createSceneSetup(
+  container: HTMLElement,
+  quality: GraphicsSettings,
+  environment: EnvironmentChoice = DEFAULT_ENVIRONMENT,
+): SceneSetup {
+  const look = lookFor(environment);
+  const horizon = new THREE.Color(look.horizon);
   const scene = new THREE.Scene();
   // Fallback flat colour behind the sky dome (e.g. the instant before the
   // first frame) — matches the dome's own horizon tone, and is also the fog
   // colour, so real geometry fading into fog blends into the dome's horizon
   // band rather than into a second, mismatched blue.
-  scene.background = HORIZON_COLOR;
-  scene.fog = new THREE.Fog(HORIZON_COLOR, quality.fogNear, quality.fogFar);
+  scene.background = horizon;
+  scene.fog = new THREE.Fog(horizon, quality.fogNear * look.fogScale, quality.fogFar * look.fogScale);
 
   // The far plane sits well past the fog so nothing pops at the fog's edge;
   // beyond it everything is sky-coloured anyway.
@@ -110,7 +117,7 @@ export function createSceneSetup(container: HTMLElement, quality: GraphicsSettin
   camera.position.set(8, 6, 12);
   camera.lookAt(0, 1, 0);
 
-  const skyDome = buildSkyDome(cameraFar * 0.9);
+  const skyDome = buildSkyDome(cameraFar * 0.9, look);
   scene.add(skyDome);
 
   const renderer = new THREE.WebGLRenderer({ antialias: quality.antialias });
@@ -120,10 +127,10 @@ export function createSceneSetup(container: HTMLElement, quality: GraphicsSettin
   renderer.shadowMap.type = quality.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   container.appendChild(renderer.domElement);
 
-  const hemiLight = new THREE.HemisphereLight(0xffffff, 0x3a3a3a, 1.0);
+  const hemiLight = new THREE.HemisphereLight(look.hemiSky, look.hemiGround, look.hemiIntensity);
   scene.add(hemiLight);
 
-  const sunLight = new THREE.DirectionalLight(0xffffff, 2.0);
+  const sunLight = new THREE.DirectionalLight(look.sunColor, look.sunIntensity);
   sunLight.position.copy(SUN_OFFSET);
   sunLight.castShadow = quality.shadows;
   sunLight.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);

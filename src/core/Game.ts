@@ -28,6 +28,9 @@ import { buildTrack, type BuiltTrack } from "../track/TrackBuilder";
 import { buildScenery } from "../track/Scenery";
 import { buildHills, groundFillHeight } from "../track/Hills";
 import { buildClouds } from "../render/Sky";
+import { applySnow, lookFor, NightLighting, Precipitation } from "../render/Environment";
+import type { LampRegistry } from "../track/LampRegistry";
+import { buildSpectators } from "../track/Roadside";
 import { createPostProcessing, type PostProcessing } from "../render/PostProcessing";
 import { OpponentAI } from "../ai/OpponentAI";
 import {
@@ -183,6 +186,8 @@ export class Game {
   /** One per bot, kept so a restart can clear their chases and cooldowns. */
   private readonly combatBehaviors: CombatBehavior[] = [];
   /** Live fitting numbers for the bike model; edited in the debug GUI, re-applied via `refitBikeModel`. */
+  private precipitation: Precipitation | null = null;
+  private night: NightLighting | null = null;
   private readonly bikeFitting: BikeFitting = { ...DEFAULT_BIKE_FITTING };
   private bikeVisuals: BikeVisualsFactory = createPlaceholderBikeVisuals;
 
@@ -211,14 +216,15 @@ export class Game {
     console.info(
       `[track] "${layout.name}" — ${layout.description} (quality: ${choice.quality}, transmission: ${choice.transmission})`,
     );
-    this.builtTrack = buildTrack(this.physics, this.scene, this.track, this.surfaces);
+    const lamps: LampRegistry = { lit: choice.dayMode === "night", positions: [] };
+    this.builtTrack = buildTrack(this.physics, this.scene, this.track, this.surfaces, lamps);
     this.stunts = new StuntSystem(this.track);
 
     const quality = QUALITY_PRESETS[choice.quality];
     const hills = buildHills(this.track, quality, groundFillHeight(this.track));
     this.scene.add(hills.group);
-    this.scene.add(buildScenery(this.track, quality, hills.heightAt).group);
-    this.scene.add(buildClouds(this.track, quality).group);
+    this.scene.add(buildScenery(this.track, quality, hills.heightAt, lamps).group);
+    this.scene.add(buildClouds(this.track, quality, lookFor(choice).cloudTint).group);
     this.postProcessing = quality.postProcessing
       ? createPostProcessing(this.renderer, this.scene, this.camera)
       : null;
@@ -241,10 +247,23 @@ export class Game {
       setRiderCharacter(null);
     }
 
+    // Fans at the start and finish lines wear the rider model, so they come after it is registered.
+    this.scene.add(buildSpectators(this.track, []));
+    // Season. Winter whitens everything built so far (not the bikes, made next) and snows;
+    // rain only falls. Both streak past a box that follows the camera.
+    if (choice.season === "winter") {
+      applySnow(this.scene);
+    }
+    if (choice.season !== "summer") {
+      this.precipitation = new Precipitation(choice.season === "winter" ? "snow" : "rain", quality, choice.dayMode === "night");
+      this.scene.add(this.precipitation.object);
+    }
+
     this.input = new InputManager();
     this.mobileInput = new MobileInputManager();
     this.player = this.createField();
     this.player.bike.controller.setTransmissionMode(choice.transmission);
+    if (choice.dayMode === "night") this.night = new NightLighting(this.scene, lamps, this.racers);
 
     // Drivers are assigned only once every racer exists, because the AI needs
     // to see the whole field in order to avoid it, and combat needs it to find
@@ -324,7 +343,7 @@ export class Game {
   }
 
   static async bootstrap(container: HTMLElement, choice: StartChoice): Promise<Game> {
-    const setup = createSceneSetup(container, QUALITY_PRESETS[choice.quality]);
+    const setup = createSceneSetup(container, QUALITY_PRESETS[choice.quality], { season: choice.season, dayMode: choice.dayMode });
     // Physics and assets are independent, so they load concurrently; assets
     // never reject, so this can't be the thing that stops the game starting.
     const [physics, assets] = await Promise.all([PhysicsWorld.create(), loadAssets()]);
@@ -1195,6 +1214,8 @@ export class Game {
     });
     this.animationClock += frameDelta;
     this.builtTrack.animate(this.animationClock);
+    this.precipitation?.update(this.animationClock, this.camera.position);
+    this.night?.update(this.player, this.camera, this.cameraRig.mode === "trackside");
     // The traffic light by the start line: red, then amber for the last two seconds, then green.
     const phaseNow = this.flow.current;
     const light =

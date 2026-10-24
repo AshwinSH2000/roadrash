@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <!-- iPhone has no Fullscreen API at all — launching from a home-screen
          icon (Share -> Add to Home Screen) is the only way to hide Safari's
          own chrome there, and these are what make that standalone mode fill
@@ -25,6 +25,21 @@
       }
       canvas {
         display: block;
+      }
+      /* A game, not a page: no text selection (and so no "search the web" bubble on a long press),
+         no callout menu, no grey tap flash, and no double-tap zoom. */
+      * {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      html, body {
+        touch-action: manipulation;
+      }
+      select, input, textarea {
+        -webkit-user-select: auto;
+        user-select: auto;
       }
     </style>
   </head>

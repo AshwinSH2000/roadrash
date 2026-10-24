@@ -3,6 +3,7 @@ import type { TrackDefinition } from "./TrackDefinition";
 import { CITY_HALF_WIDTH, OFFROAD_HALF_WIDTH } from "./TrackDefinition";
 import type { GraphicsSettings } from "../settings/GraphicsSettings";
 import { buildCity } from "./City";
+import type { LampRegistry } from "./LampRegistry";
 
 /**
  * Roadside scenery — low-poly props scattered past the off-road band, so the
@@ -52,7 +53,7 @@ function slotCount(track: TrackDefinition, stride: number): number {
 }
 
 /** Builds the scattered scenery for one track, at a density set by the quality preset. */
-export function buildScenery(track: TrackDefinition, quality: GraphicsSettings, ground?: GroundHeight): Scenery {
+export function buildScenery(track: TrackDefinition, quality: GraphicsSettings, ground?: GroundHeight, lamps?: LampRegistry): Scenery {
   const group = new THREE.Group();
   group.name = "scenery";
   const disposers: Array<() => void> = [];
@@ -63,7 +64,7 @@ export function buildScenery(track: TrackDefinition, quality: GraphicsSettings, 
 
   group.add(buildForestFarmMountainAndCity(track, quality, disposers, ground));
   group.add(buildBackgroundProps(track, quality, disposers, ground));
-  group.add(buildCity(track, quality, disposers));
+  group.add(buildCity(track, quality, disposers, lamps));
   group.add(buildMountainBackdrop(track, quality, disposers));
 
   return {

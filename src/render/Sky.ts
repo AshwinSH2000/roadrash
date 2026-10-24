@@ -30,7 +30,7 @@ export interface Sky {
 }
 
 /** `quality.sceneryDensity` reused here too — more clouds on higher presets, none of it free-standing new tuning. */
-export function buildClouds(track: TrackDefinition, quality: GraphicsSettings): Sky {
+export function buildClouds(track: TrackDefinition, quality: GraphicsSettings, tint = 1): Sky {
   const group = new THREE.Group();
   group.name = "clouds";
 
@@ -63,6 +63,7 @@ export function buildClouds(track: TrackDefinition, quality: GraphicsSettings): 
       map: texture,
       transparent: true,
       depthWrite: false,
+      color: new THREE.Color(tint, tint, tint),
       opacity: 0.7 + Math.random() * 0.25,
       rotation: Math.random() * Math.PI * 2,
     });

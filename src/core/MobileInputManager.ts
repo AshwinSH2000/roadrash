@@ -483,12 +483,46 @@ export class MobileInputManager {
       "Rotate your phone to landscape to play",
     );
     document.body.appendChild(overlay);
+    // Decided from the window's own shape, and looked at again shortly after a rotation and twice a
+    // second: iPhone Safari can report the new size a moment after the rotation event, and a media
+    // query that was read too early stays wrong until the next resize.
     const syncOverlay = (): void => {
-      overlay.style.display = window.matchMedia("(orientation: portrait)").matches ? "flex" : "none";
+      overlay.style.display = window.innerHeight > window.innerWidth ? "flex" : "none";
     };
     syncOverlay();
     window.addEventListener("resize", syncOverlay);
-    window.addEventListener("orientationchange", syncOverlay);
+    window.addEventListener("orientationchange", () => {
+      syncOverlay();
+      window.setTimeout(syncOverlay, 150);
+      window.setTimeout(syncOverlay, 500);
+    });
+    window.setInterval(syncOverlay, 500);
+
+    // `?debug=1`: a line at the top of the screen with what the browser reports, to see why the
+    // overlay does or doesn't show on a given phone.
+    if (new URLSearchParams(window.location.search).get("debug") === "1") {
+      const line = el(
+        "div",
+        "position:fixed;bottom:0;left:0;right:0;z-index:2000000;pointer-events:none;padding:2px 6px;background:rgba(0,0,0,0.7);color:#7CFC00;font:11px/1.3 ui-monospace,Menlo,monospace;white-space:pre-wrap",
+      );
+      document.body.appendChild(line);
+      const refresh = (): void => {
+        const legacy = (window as unknown as { orientation?: number }).orientation;
+        line.textContent = [
+          `window ${window.innerWidth}x${window.innerHeight}`,
+          `media ${window.matchMedia("(orientation: portrait)").matches ? "portrait" : "landscape"}`,
+          `screen.orientation ${screen.orientation ? `${screen.orientation.type} ${screen.orientation.angle}` : "n/a"}`,
+          `window.orientation ${legacy ?? "n/a"}`,
+          `screen ${screen.width}x${screen.height}`,
+          `fullscreen ${document.fullscreenElement ? "yes" : "no"}`,
+          `overlay ${overlay.style.display}`,
+        ].join("\n");
+      };
+      refresh();
+      window.addEventListener("resize", refresh);
+      window.addEventListener("orientationchange", refresh);
+      window.setInterval(refresh, 500);
+    }
   }
 
   /**

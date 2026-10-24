@@ -54,7 +54,6 @@ const entries = {
   scenery: "scenery-probe.ts",
   ridercharacter: "rider-character-probe.ts",
   jump: "jump-probe.ts",
-  traffic: "traffic-sim.ts",
 };
 const entry = entries[which];
 if (!entry) {

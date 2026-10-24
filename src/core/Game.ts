@@ -52,8 +52,6 @@ import {
   type BikeFitting,
   type BikeVisualsFactory,
 } from "../entities/BikeVisuals";
-import { Traffic, CRASH_CLOSING_KPH, type ImpactReport } from "../entities/Traffic";
-import { GROUPS_BIKE_GHOST } from "../physics/CollisionGroups";
 import { LOCAL_FORWARD, LOCAL_RIGHT, WORLD_UP } from "../utils/Directions";
 
 /**
@@ -87,8 +85,6 @@ const END_SCREEN_DELAY = 1.2;
  * about how fast the bike had been going. The impulse must stay small enough
  * that the rider's own momentum is what dominates.
  */
-/** The only course with traffic. */
-const TRAFFIC_COURSE = "Drag Race";
 const DEBUG_KNOCKDOWN_IMPULSE = 250;
 /**
  * Speed the B-key jump knocks the rider off at, in m/s: 245 km/h, the peak
@@ -161,7 +157,6 @@ export class Game {
   private readonly waterSeconds = new Map<Racer, number>();
   private animationClock = 0;
   /** Cars, trucks and motorbikes on the drag strip; null on every other course. */
-  private readonly traffic: Traffic | null;
   private lastStartLight = "off";
   /** Whether each rider's strike was in its active phase last frame, to sound the swing once. */
   private readonly wasSwinging = new Map<Racer, boolean>();
@@ -249,14 +244,6 @@ export class Game {
     this.input = new InputManager();
     this.mobileInput = new MobileInputManager();
     this.player = this.createField();
-    this.traffic = layout.name === TRAFFIC_COURSE ? new Traffic(this.physics, this.scene, this.track) : null;
-    if (this.traffic) {
-      // Only the player's bike is solid to traffic; the bots can't dodge it.
-      for (const racer of this.racers) {
-        if (!racer.isPlayer) racer.bike.controller.chassisCollider.setCollisionGroups(GROUPS_BIKE_GHOST);
-      }
-      console.info(`[traffic] ${this.traffic.count} vehicles on "${layout.name}", crash above ${CRASH_CLOSING_KPH} km/h closing.`);
-    }
     this.player.bike.controller.setTransmissionMode(choice.transmission);
 
     // Drivers are assigned only once every racer exists, because the AI needs
@@ -287,7 +274,7 @@ export class Game {
       const personality = OPPONENT_PERSONALITIES[personalityIndex++];
       const behavior = new CombatBehavior(racer, this.racers, this.combat, personality, this.aiCombatSettings);
       this.combatBehaviors.push(behavior);
-      racer.baseDriver = new OpponentAI(racer, this.track, this.racers, personality, behavior, this.traffic);
+      racer.baseDriver = new OpponentAI(racer, this.track, this.racers, personality, behavior);
       racer.driver = racer.baseDriver;
     }
 
@@ -925,19 +912,6 @@ export class Game {
     );
   }
 
-  /** The player ran into a vehicle: a crash throws them off, a shunt only thumps. */
-  private onTrafficImpact(impact: ImpactReport): void {
-    if (impact.crashed) {
-      this.engineAudio.playImpact(2.5);
-      this.engineAudio.playFall(1);
-    } else {
-      this.engineAudio.playImpact(0.8);
-    }
-    console.log(
-      `[traffic] ${impact.crashed ? "crashed into" : "shunted"} a ${impact.vehicle} at ${impact.closingKph.toFixed(0)} km/h closing.`,
-    );
-  }
-
   /** Drives each rider's baton swing / standing kick from their combat state. */
   private syncStrikeVisuals(): void {
     for (const racer of this.racers) {
@@ -1167,13 +1141,6 @@ export class Game {
         this.player.bike.controller.setBoost(this.nitro.isActive, this.nitro.isTurbo, this.nitro.isHyper);
       }
       this.combat.tick(FIXED_DT);
-      if (this.traffic && phase !== RacePhase.COUNTDOWN) {
-        for (const racer of this.racers) {
-          const impact = this.traffic.resolvePlayerImpact(racer, FIXED_DT);
-          if (impact && racer.isPlayer) this.onTrafficImpact(impact);
-        }
-        this.traffic.update(FIXED_DT);
-      }
       for (const racer of this.racers) racer.bike.prePhysicsStep(FIXED_DT);
       this.physics.step();
       for (const racer of this.racers) racer.bike.postPhysicsStep();
@@ -1216,7 +1183,6 @@ export class Game {
     }
 
     const frameDelta = this.accumulator.frameDelta;
-    this.traffic?.syncRender(this.accumulator.alpha);
     for (const racer of this.racers) {
       racer.bike.syncRender(this.accumulator.alpha, frameDelta);
       racer.rider.syncRender(this.accumulator.alpha);

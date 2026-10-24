@@ -4,7 +4,6 @@ import type { TrackDefinition } from "../track/TrackDefinition";
 import { ROAD_HALF_WIDTH } from "../track/TrackDefinition";
 import { LOCAL_FORWARD, LOCAL_RIGHT } from "../utils/Directions";
 import type { RiderPersonality } from "./RiderPersonality";
-import type { Traffic } from "../entities/Traffic";
 import { computeAvoidanceBias } from "./AvoidanceBehavior";
 import type { CombatBehavior, CombatIntent } from "./CombatBehavior";
 
@@ -51,8 +50,6 @@ const LOOP_ALIGN_DISTANCE = 80;
  * generate. A bot is not faster because it cheats; it's faster because it
  * picks a better line and brakes at the right moment.
  */
-/** Share of normal traffic avoidance kept while hunting a rival. */
-const HUNTING_TRAFFIC_AWARENESS = 0.4;
 
 export class OpponentAI implements Driver {
   /** Speed decision currently being acted on, held across the reaction delay. */
@@ -62,8 +59,6 @@ export class OpponentAI implements Driver {
   private readonly tmpForward = new THREE.Vector3();
   private readonly tmpRight = new THREE.Vector3();
   private readonly tmpToTarget = new THREE.Vector3();
-  /** Speed in m/s the traffic ahead allows; Infinity when the road is clear. */
-  private trafficSpeedCap = Infinity;
 
   constructor(
     private readonly self: Racer,
@@ -72,8 +67,6 @@ export class OpponentAI implements Driver {
     private readonly personality: RiderPersonality,
     /** Optional: without one the bot only races, which is what the driving sims want. */
     private readonly combat: CombatBehavior | null = null,
-    /** Drag Race only: vehicles to steer around. */
-    private readonly traffic: Traffic | null = null,
   ) {}
 
   tick(dtSeconds: number): void {
@@ -98,20 +91,7 @@ export class OpponentAI implements Driver {
     if (this.track.featureAhead("loop", this.self.distanceAlong, LOOP_ALIGN_DISTANCE)) return 0;
     const preferred = target ? intent!.desiredLateral : this.personality.linePreference;
     const limit = ROAD_HALF_WIDTH - LINE_MARGIN;
-    let line = preferred + bias;
-    this.trafficSpeedCap = Infinity;
-    if (this.traffic) {
-      const plan = this.traffic.plan(this.self, line);
-      if (target) {
-        // A bot hunting a rival watches the rival, not the road: it only half
-        // dodges, and never brakes for traffic, so now and then it cuts
-        // behind a vehicle and hits it.
-        line += (plan.lateral - line) * HUNTING_TRAFFIC_AWARENESS;
-      } else {
-        line = plan.lateral;
-        this.trafficSpeedCap = plan.speedCap;
-      }
-    }
+    const line = preferred + bias;
     return THREE.MathUtils.clamp(line, -limit, limit);
   }
 
@@ -226,7 +206,7 @@ export class OpponentAI implements Driver {
       this.decisionTimer = this.personality.reactionTime;
     }
 
-    const error = Math.min(this.heldTargetSpeed, this.trafficSpeedCap) - bike.forwardSpeed;
+    const error = this.heldTargetSpeed - bike.forwardSpeed;
     return THREE.MathUtils.clamp(error * THROTTLE_GAIN, -1, 1);
   }
 }
